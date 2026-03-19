@@ -1,6 +1,8 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { expect } from "chai";
+import * as fs from "fs";
+import * as path from "path";
 import {
   TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddressSync,
@@ -8,6 +10,10 @@ import {
 import { IamRegistry } from "../target/types/iam_registry";
 import { IamAnchor } from "../target/types/iam_anchor";
 import { IamVerifier } from "../target/types/iam_verifier";
+
+const fixture = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, "fixtures/test_proof.json"), "utf-8")
+);
 
 describe("e2e: full IAM verification flow", () => {
   const provider = anchor.AnchorProvider.env();
@@ -144,8 +150,8 @@ describe("e2e: full IAM verification flow", () => {
       verifier.programId
     );
 
-    const mockProof = Buffer.from([0x49, 0x41, 0x4d, 0x01, 0xaa, 0xbb]);
-    const publicInputs: number[][] = [Array.from(initialCommitment)];
+    const mockProof = Buffer.from(fixture.proof_bytes);
+    const publicInputs: number[][] = fixture.public_inputs;
 
     await verifier.methods
       .verifyProof(Buffer.from(mockProof), publicInputs, nonce)

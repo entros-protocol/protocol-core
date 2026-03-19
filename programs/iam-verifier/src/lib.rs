@@ -3,8 +3,10 @@
 use anchor_lang::prelude::*;
 
 mod errors;
+mod groth16_verifier;
 mod mock_verifier;
 mod state;
+mod verifying_key;
 
 use errors::VerifierError;
 use state::{Challenge, VerificationResult};
@@ -59,10 +61,10 @@ pub mod iam_verifier {
         // Mark challenge as consumed
         challenge.used = true;
 
-        // Run mock verification (Phase 1: magic prefix check)
-        let is_valid = mock_verifier::mock_verify_proof(&proof_bytes, &public_inputs);
+        // Run Groth16 verification
+        let is_valid = groth16_verifier::verify_proof(&proof_bytes, &public_inputs).is_ok();
 
-        // Compute proof hash for audit trail (simple XOR-fold for Phase 1)
+        // Compute proof hash for audit trail
         let mut proof_hash = [0u8; 32];
         for (i, byte) in proof_bytes.iter().enumerate() {
             proof_hash[i % 32] ^= byte;
