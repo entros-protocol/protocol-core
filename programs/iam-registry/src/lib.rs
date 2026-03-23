@@ -9,6 +9,18 @@ mod state;
 use errors::RegistryError;
 use state::{ProtocolConfig, ValidatorState};
 
+/// Integer square root via Newton's method (deterministic, no floating point).
+fn isqrt(n: u64) -> u64 {
+    if n == 0 { return 0; }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
 declare_id!("6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW");
 
 #[program]
@@ -86,48 +98,45 @@ pub mod iam_registry {
         let now = Clock::get()?.unix_timestamp;
 
         // 1. Recency-weighted verification count
-        // Each verification contributes 1 / (1 + days_since / 30)
-        // Recent verifications count almost fully; old ones fade toward zero
+        // Smooth decay: 3000 / (30 + days_since) gives day 0 = 100, day 30 = 50, day 60 = 33
         let mut recency_score: u64 = 0;
         for ts in recent_timestamps.iter() {
             if *ts == 0 { continue; }
             let days_since = ((now - ts) / 86400).max(0) as u64;
-            // Fixed-point: multiply by 100 for precision, divide later
-            recency_score += 100 / (1 + days_since / 30);
+            recency_score += 3000 / (30 + days_since);
         }
-        // Scale: 10 recent verifications, each worth up to 100 = max 1000
-        // Divide by 100 and multiply by increment to get base score
         let base_score = (recency_score / 100) * u64::from(config.base_trust_increment);
 
         // 2. Regularity bonus
-        // Compute gaps between consecutive verifications, then stddev of gaps
-        // Lower stddev = more regular = higher bonus
-        let mut gaps: Vec<i64> = Vec::new();
+        // Compute gaps between consecutive verifications using fixed array
+        let mut gaps = [0i64; 9];
+        let mut gaps_len = 0usize;
         for i in 0..9 {
             let a = recent_timestamps[i];
             let b = recent_timestamps[i + 1];
             if a > 0 && b > 0 {
-                gaps.push((a - b) / 86400); // gap in days
+                gaps[gaps_len] = (a - b) / 86400;
+                gaps_len += 1;
             }
         }
-        let regularity_bonus: u64 = if gaps.len() >= 2 {
-            let mean_gap: i64 = gaps.iter().sum::<i64>() / gaps.len() as i64;
-            let variance: u64 = gaps.iter()
+        let regularity_bonus: u64 = if gaps_len >= 2 {
+            let gap_slice = &gaps[..gaps_len];
+            let mean_gap: i64 = gap_slice.iter().sum::<i64>() / gaps_len as i64;
+            let variance: u64 = gap_slice.iter()
                 .map(|g| ((g - mean_gap) * (g - mean_gap)) as u64)
-                .sum::<u64>() / gaps.len() as u64;
-            let stddev = (variance as f64).sqrt() as u64;
-            // Lower stddev = more regular = higher bonus (max 20)
+                .sum::<u64>() / gaps_len as u64;
+            let stddev = isqrt(variance);
             20u64.saturating_sub(stddev.min(20))
         } else {
             0
         };
 
-        // 3. Age bonus with diminishing returns
+        // 3. Age bonus with diminishing returns (integer sqrt, no f64)
         let age_seconds = now
             .checked_sub(creation_timestamp)
             .ok_or(RegistryError::ArithmeticOverflow)?;
         let age_days: u64 = (age_seconds / 86400).try_into().unwrap_or(0);
-        let age_bonus = ((age_days.min(365) as f64).sqrt() * 2.0) as u64;
+        let age_bonus = isqrt(age_days.min(365)) * 2;
 
         // 4. Combine
         let total = base_score
