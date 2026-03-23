@@ -4,6 +4,7 @@ use anchor_lang::prelude::*;
 
 mod errors;
 mod groth16_verifier;
+#[cfg(test)]
 mod mock_verifier;
 mod state;
 mod verifying_key;
@@ -65,9 +66,12 @@ pub mod iam_verifier {
         let is_valid = groth16_verifier::verify_proof(&proof_bytes, &public_inputs).is_ok();
 
         // Compute proof hash for audit trail
+        // Rotate-and-XOR hash: each byte position rotates the accumulator
+        // before XOR, preventing trivial collisions from byte reordering
         let mut proof_hash = [0u8; 32];
-        for (i, byte) in proof_bytes.iter().enumerate() {
-            proof_hash[i % 32] ^= byte;
+        for (i, &byte) in proof_bytes.iter().enumerate() {
+            let pos = i % 32;
+            proof_hash[pos] = proof_hash[pos].rotate_left(3) ^ byte;
         }
 
         // Store verification result
@@ -85,6 +89,16 @@ pub mod iam_verifier {
             nonce,
         });
 
+        Ok(())
+    }
+
+    /// Close a used or expired challenge account to reclaim rent.
+    pub fn close_challenge(_ctx: Context<CloseChallenge>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Close a verification result account to reclaim rent.
+    pub fn close_verification_result(_ctx: Context<CloseVerificationResult>) -> Result<()> {
         Ok(())
     }
 }
@@ -133,6 +147,33 @@ pub struct VerifyProof<'info> {
     pub verification_result: Account<'info, VerificationResult>,
 
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseChallenge<'info> {
+    #[account(mut)]
+    pub challenger: Signer<'info>,
+
+    #[account(
+        mut,
+        close = challenger,
+        constraint = challenge.challenger == challenger.key(),
+        constraint = challenge.used @ VerifierError::ChallengeNotUsed,
+    )]
+    pub challenge: Account<'info, Challenge>,
+}
+
+#[derive(Accounts)]
+pub struct CloseVerificationResult<'info> {
+    #[account(mut)]
+    pub verifier: Signer<'info>,
+
+    #[account(
+        mut,
+        close = verifier,
+        constraint = verification_result.verifier == verifier.key(),
+    )]
+    pub verification_result: Account<'info, VerificationResult>,
 }
 
 // --- Events ---
