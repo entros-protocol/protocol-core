@@ -62,8 +62,8 @@ pub mod iam_verifier {
         // Mark challenge as consumed
         challenge.used = true;
 
-        // Run Groth16 verification
-        let is_valid = groth16_verifier::verify_proof(&proof_bytes, &public_inputs).is_ok();
+        // Run Groth16 verification — reverts the entire transaction on invalid proof
+        groth16_verifier::verify_proof(&proof_bytes, &public_inputs)?;
 
         // Compute proof hash for audit trail
         // Rotate-and-XOR hash: each byte position rotates the accumulator
@@ -74,18 +74,18 @@ pub mod iam_verifier {
             proof_hash[pos] = proof_hash[pos].rotate_left(3) ^ byte;
         }
 
-        // Store verification result
+        // Store verification result (only reached for valid proofs)
         let result = &mut ctx.accounts.verification_result;
         result.verifier = ctx.accounts.verifier.key();
         result.proof_hash = proof_hash;
         result.verified_at = now;
-        result.is_valid = is_valid;
+        result.is_valid = true;
         result.challenge_nonce = nonce;
         result.bump = ctx.bumps.verification_result;
 
         emit!(VerificationComplete {
             verifier: result.verifier,
-            is_valid,
+            is_valid: true,
             nonce,
         });
 

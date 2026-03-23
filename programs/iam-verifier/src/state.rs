@@ -34,7 +34,9 @@ pub struct VerificationResult {
     pub proof_hash: [u8; 32],
     /// Unix timestamp of verification
     pub verified_at: i64,
-    /// Whether the proof was valid
+    /// Whether the proof was valid.
+    /// Always true for persisted records — invalid proofs revert the transaction
+    /// and never create a VerificationResult. Retained for account layout stability.
     pub is_valid: bool,
     /// The challenge nonce that was consumed
     pub challenge_nonce: [u8; 32],
