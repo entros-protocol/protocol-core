@@ -153,6 +153,38 @@ pub mod iam_registry {
 
         Ok(())
     }
+
+    /// Unstake SOL and close the validator account.
+    /// Returns staked SOL from the vault and rent from the ValidatorState PDA.
+    /// The validator can re-register afterward.
+    ///
+    /// Mainnet requirements (not implemented for devnet):
+    /// - Unbonding period (timelock before withdrawal)
+    /// - is_active check (prevent unstake after slashing)
+    /// - Minimum vault balance guard
+    pub fn unstake_validator(ctx: Context<UnstakeValidator>) -> Result<()> {
+        let stake = ctx.accounts.validator_state.stake;
+
+        let vault_bump = ctx.bumps.vault;
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.validator.to_account_info(),
+                },
+                &[&[b"vault", &[vault_bump]]],
+            ),
+            stake,
+        )?;
+
+        emit!(ValidatorUnstaked {
+            authority: ctx.accounts.validator_state.authority,
+            amount: stake,
+        });
+
+        Ok(())
+    }
 }
 
 // --- Account Contexts ---
@@ -214,6 +246,31 @@ pub struct ComputeTrustScore<'info> {
     pub protocol_config: Account<'info, ProtocolConfig>,
 }
 
+#[derive(Accounts)]
+pub struct UnstakeValidator<'info> {
+    #[account(mut)]
+    pub validator: Signer<'info>,
+
+    #[account(
+        mut,
+        close = validator,
+        seeds = [b"validator", validator.key().as_ref()],
+        bump = validator_state.bump,
+        constraint = validator_state.authority == validator.key() @ RegistryError::Unauthorized,
+    )]
+    pub validator_state: Account<'info, ValidatorState>,
+
+    /// CHECK: Vault PDA returning staked SOL. Signed via invoke_signed.
+    #[account(
+        mut,
+        seeds = [b"vault"],
+        bump,
+    )]
+    pub vault: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // --- Events ---
 
 #[event]
@@ -227,4 +284,10 @@ pub struct TrustScoreComputed {
     pub verification_count: u32,
     pub creation_timestamp: i64,
     pub trust_score: u16,
+}
+
+#[event]
+pub struct ValidatorUnstaked {
+    pub authority: Pubkey,
+    pub amount: u64,
 }

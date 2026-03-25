@@ -8,7 +8,7 @@ pub enum RegistryError {
     ValidatorAlreadyRegistered,
     #[msg("Validator not active")]
     ValidatorNotActive,
-    #[msg("Unauthorized: not the protocol admin")]
+    #[msg("Unauthorized: caller is not the expected authority")]
     Unauthorized,
     #[msg("Arithmetic overflow")]
     ArithmeticOverflow,

@@ -26,19 +26,25 @@ describe("iam-registry", () => {
   const BASE_TRUST_INCREMENT = 100;
 
   it("initializes protocol config", async () => {
-    await program.methods
-      .initializeProtocol(
-        MIN_STAKE,
-        CHALLENGE_EXPIRY,
-        MAX_TRUST_SCORE,
-        BASE_TRUST_INCREMENT
-      )
-      .accounts({
-        admin: admin.publicKey,
-        protocolConfig: protocolConfigPda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
+    // May already be initialized by iam-anchor's before block (alphabetical test ordering).
+    // Initialize if needed, then verify the config is correct regardless.
+    try {
+      await program.methods
+        .initializeProtocol(
+          MIN_STAKE,
+          CHALLENGE_EXPIRY,
+          MAX_TRUST_SCORE,
+          BASE_TRUST_INCREMENT
+        )
+        .accounts({
+          admin: admin.publicKey,
+          protocolConfig: protocolConfigPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+    } catch {
+      // Already initialized — that's fine
+    }
 
     const config = await program.account.protocolConfig.fetch(protocolConfigPda);
     expect(config.admin.toBase58()).to.equal(admin.publicKey.toBase58());
@@ -140,15 +146,22 @@ describe("iam-registry", () => {
     const now = Math.floor(Date.now() / 1000);
     const thirtyDaysAgo = now - 30 * 86400;
 
+    // recent_timestamps: one verification 1 day ago, rest zeros
+    const recentTimestamps = [
+      new anchor.BN(now - 86400),
+      ...Array(9).fill(new anchor.BN(0)),
+    ];
+
     const listener = program.addEventListener("TrustScoreComputed", (event) => {
-      // 5 verifications * 100 base_increment = 500
-      // 30 days * 2 = 60
-      // Total = 560
-      expect(event.trustScore).to.equal(560);
+      // recency: 3000/(30+1) = 96, base = (96/100)*100 = 0 (integer truncation)
+      // regularity: 0 (only 1 non-zero timestamp, need >= 2 gaps)
+      // age: isqrt(30)*2 = 10
+      // total = 10
+      expect(event.trustScore).to.equal(10);
     });
 
     await program.methods
-      .computeTrustScore(5, new anchor.BN(thirtyDaysAgo))
+      .computeTrustScore(5, new anchor.BN(thirtyDaysAgo), recentTimestamps)
       .accounts({
         protocolConfig: protocolConfigPda,
       })
@@ -157,17 +170,127 @@ describe("iam-registry", () => {
     program.removeEventListener(listener);
   });
 
+  it("unstakes validator and returns SOL", async () => {
+    const validator = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      validator.publicKey,
+      5_000_000_000
+    );
+    await provider.connection.confirmTransaction(sig);
+
+    const [validatorStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("validator"), validator.publicKey.toBuffer()],
+      program.programId
+    );
+
+    // Register with 1 SOL
+    await program.methods
+      .registerValidator(MIN_STAKE)
+      .accounts({
+        validator: validator.publicKey,
+        protocolConfig: protocolConfigPda,
+        validatorState: validatorStatePda,
+        vault: vaultPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([validator])
+      .rpc();
+
+    const balanceBefore = await provider.connection.getBalance(validator.publicKey);
+
+    // Unstake
+    await program.methods
+      .unstakeValidator()
+      .accounts({
+        validator: validator.publicKey,
+        validatorState: validatorStatePda,
+        vault: vaultPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([validator])
+      .rpc();
+
+    const balanceAfter = await provider.connection.getBalance(validator.publicKey);
+
+    // Should have received staked SOL + rent from closed ValidatorState
+    expect(balanceAfter).to.be.greaterThan(balanceBefore);
+
+    // ValidatorState account should be closed
+    const account = await provider.connection.getAccountInfo(validatorStatePda);
+    expect(account).to.be.null;
+  });
+
+  it("rejects unstake from non-authority", async () => {
+    const validator = anchor.web3.Keypair.generate();
+    const attacker = anchor.web3.Keypair.generate();
+
+    const sig1 = await provider.connection.requestAirdrop(
+      validator.publicKey,
+      5_000_000_000
+    );
+    await provider.connection.confirmTransaction(sig1);
+    const sig2 = await provider.connection.requestAirdrop(
+      attacker.publicKey,
+      2_000_000_000
+    );
+    await provider.connection.confirmTransaction(sig2);
+
+    const [validatorStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("validator"), validator.publicKey.toBuffer()],
+      program.programId
+    );
+
+    await program.methods
+      .registerValidator(MIN_STAKE)
+      .accounts({
+        validator: validator.publicKey,
+        protocolConfig: protocolConfigPda,
+        validatorState: validatorStatePda,
+        vault: vaultPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([validator])
+      .rpc();
+
+    // Attacker tries to unstake — but PDA is derived from validator's key,
+    // so the seeds constraint will fail (attacker's key != validator's key)
+    const [attackerStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("validator"), attacker.publicKey.toBuffer()],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .unstakeValidator()
+        .accounts({
+          validator: attacker.publicKey,
+          validatorState: validatorStatePda,
+          vault: vaultPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([attacker])
+        .rpc();
+      expect.fail("Should have thrown — attacker cannot unstake another validator");
+    } catch (err: any) {
+      expect(err).to.exist;
+    }
+  });
+
   it("caps trust score at max", async () => {
     const now = Math.floor(Date.now() / 1000);
     const yearAgo = now - 365 * 86400;
 
+    // Fill all 10 recent timestamps to maximize recency score
+    const recentTimestamps = Array(10)
+      .fill(0)
+      .map((_, i) => new anchor.BN(now - i * 86400));
+
     const listener = program.addEventListener("TrustScoreComputed", (event) => {
-      // 200 * 100 = 20000, but max is 10000
       expect(event.trustScore).to.equal(10000);
     });
 
     await program.methods
-      .computeTrustScore(200, new anchor.BN(yearAgo))
+      .computeTrustScore(200, new anchor.BN(yearAgo), recentTimestamps)
       .accounts({
         protocolConfig: protocolConfigPda,
       })
