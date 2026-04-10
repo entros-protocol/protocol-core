@@ -14,4 +14,6 @@ pub enum VerifierError {
     InvalidPublicInputs,
     #[msg("Challenge must be used before closing")]
     ChallengeNotUsed,
+    #[msg("Invalid nonce: must not be all zeros")]
+    InvalidNonce,
 }
