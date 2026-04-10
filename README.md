@@ -6,9 +6,9 @@ Solana on-chain programs for the IAM Protocol. Three Anchor programs handle iden
 
 **iam-anchor** — Non-transferable identity token. Creates a Token-2022 mint with the NonTransferable extension, mints one token per user, and manages an IdentityState PDA that tracks verification history and Trust Score.
 
-**iam-verifier** — ZK proof verification. Accepts Groth16 proofs and public inputs, verifies them on-chain, and manages challenge nonces for anti-replay. Currently uses a mock verifier (Phase 1). Real circuit verification keys arrive in Phase 2.
+**iam-verifier** — ZK proof verification. Accepts Groth16 proofs and public inputs, verifies them on-chain via `groth16-solana`, and manages challenge nonces for anti-replay.
 
-**iam-registry** — Protocol configuration and validator management. Stores protocol parameters, handles validator registration with SOL staking, and computes Trust Scores.
+**iam-registry** — Protocol configuration and validator management. Stores protocol parameters (trust score weights, challenge expiry, max stake) and handles validator registration with SOL staking.
 
 ## Devnet Program IDs
 

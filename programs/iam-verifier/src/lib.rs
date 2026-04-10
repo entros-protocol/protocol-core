@@ -24,6 +24,7 @@ pub mod iam_verifier {
 
     /// Create a verification challenge with a client-generated nonce.
     pub fn create_challenge(ctx: Context<CreateChallenge>, nonce: [u8; 32]) -> Result<()> {
+        require!(nonce != [0u8; 32], VerifierError::InvalidNonce);
         let now = Clock::get()?.unix_timestamp;
 
         let challenge = &mut ctx.accounts.challenge;

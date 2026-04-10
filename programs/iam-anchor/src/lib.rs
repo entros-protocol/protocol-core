@@ -176,27 +176,38 @@ pub mod iam_anchor {
         let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
         let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
 
-        // Recency-weighted verification score (same algorithm as iam_registry)
-        let mut recency_score: u64 = 0;
+        // Deduplicate timestamps by calendar day (newest-first order means
+        // same-day entries are adjacent). Multiple verifications on the same day
+        // count once for scoring — consistency over time, not volume.
+        let mut unique_ts = [0i64; 10];
+        let mut unique_count: usize = 0;
+        let mut prev_day: i64 = -1;
         for ts in identity.recent_timestamps.iter() {
             if *ts == 0 {
                 continue;
             }
-            let days_since = ((now - ts) / 86400).max(0) as u64;
+            let days_since = ((now - ts) / 86400).max(0);
+            if days_since != prev_day {
+                unique_ts[unique_count] = *ts;
+                unique_count += 1;
+                prev_day = days_since;
+            }
+        }
+
+        // Recency-weighted score from unique verification days
+        let mut recency_score: u64 = 0;
+        for i in 0..unique_count {
+            let days_since = ((now - unique_ts[i]) / 86400).max(0) as u64;
             recency_score += 3000 / (30 + days_since);
         }
         let base_score = (recency_score / 100) * u64::from(base_trust_increment);
 
-        // Regularity bonus from gap consistency
+        // Regularity bonus from gap consistency (unique days only)
         let mut gaps = [0i64; 9];
         let mut gaps_len = 0usize;
-        for i in 0..9 {
-            let a = identity.recent_timestamps[i];
-            let b = identity.recent_timestamps[i + 1];
-            if a > 0 && b > 0 {
-                gaps[gaps_len] = (a - b) / 86400;
-                gaps_len += 1;
-            }
+        for i in 0..unique_count.saturating_sub(1) {
+            gaps[gaps_len] = (unique_ts[i] - unique_ts[i + 1]) / 86400;
+            gaps_len += 1;
         }
         let regularity_bonus: u64 = if gaps_len >= 2 {
             let gap_slice = &gaps[..gaps_len];
