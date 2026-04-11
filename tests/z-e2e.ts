@@ -7,9 +7,12 @@ import {
   TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { IamRegistry } from "../target/types/iam_registry";
-import { IamAnchor } from "../target/types/iam_anchor";
-import { IamVerifier } from "../target/types/iam_verifier";
+import type { IamRegistry } from "../target/types/iam_registry";
+import type { IamAnchor } from "../target/types/iam_anchor";
+import type { IamVerifier } from "../target/types/iam_verifier";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const fixture = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "fixtures/test_proof.json"), "utf-8")
@@ -72,7 +75,7 @@ describe("e2e: full IAM verification flow", () => {
 
     await registry.methods
       .registerValidator(new anchor.BN(1_000_000_000))
-      .accounts({
+      .accountsStrict({
         validator: validatorKeypair.publicKey,
         protocolConfig: protocolConfigPda,
         validatorState: validatorStatePda,
@@ -103,7 +106,7 @@ describe("e2e: full IAM verification flow", () => {
 
     await iamAnchor.methods
       .mintAnchor(Array.from(initialCommitment))
-      .accounts({
+      .accountsStrict({
         user: e2eUser.publicKey,
         identityState: identityPda,
         mint: mintPda,
@@ -132,7 +135,7 @@ describe("e2e: full IAM verification flow", () => {
 
     await verifier.methods
       .createChallenge(nonce)
-      .accounts({
+      .accountsStrict({
         challenger: e2eUser.publicKey,
         challenge: challengePda,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -155,7 +158,7 @@ describe("e2e: full IAM verification flow", () => {
 
     await verifier.methods
       .verifyProof(Buffer.from(mockProof), publicInputs, nonce)
-      .accounts({
+      .accountsStrict({
         verifier: e2eUser.publicKey,
         challenge: challengePda,
         verificationResult: verificationPda,
@@ -170,7 +173,7 @@ describe("e2e: full IAM verification flow", () => {
     // 6. Update anchor with new commitment (trust score auto-computed)
     await iamAnchor.methods
       .updateAnchor(Array.from(newCommitment))
-      .accounts({
+      .accountsStrict({
         authority: e2eUser.publicKey,
         identityState: identityPda,
         protocolConfig: protocolConfigPda,

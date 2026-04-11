@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { expect } from "chai";
-import { IamRegistry } from "../target/types/iam_registry";
+import type { IamRegistry } from "../target/types/iam_registry";
 
 describe("iam-registry", () => {
   const provider = anchor.AnchorProvider.env();
@@ -36,7 +36,7 @@ describe("iam-registry", () => {
           MAX_TRUST_SCORE,
           BASE_TRUST_INCREMENT
         )
-        .accounts({
+        .accountsStrict({
           admin: admin.publicKey,
           protocolConfig: protocolConfigPda,
           systemProgram: anchor.web3.SystemProgram.programId,
@@ -63,7 +63,7 @@ describe("iam-registry", () => {
           MAX_TRUST_SCORE,
           BASE_TRUST_INCREMENT
         )
-        .accounts({
+        .accountsStrict({
           admin: admin.publicKey,
           protocolConfig: protocolConfigPda,
           systemProgram: anchor.web3.SystemProgram.programId,
@@ -93,7 +93,7 @@ describe("iam-registry", () => {
 
     await program.methods
       .registerValidator(MIN_STAKE)
-      .accounts({
+      .accountsStrict({
         validator: validator.publicKey,
         protocolConfig: protocolConfigPda,
         validatorState: validatorStatePda,
@@ -127,7 +127,7 @@ describe("iam-registry", () => {
     try {
       await program.methods
         .registerValidator(new anchor.BN(100)) // way below min_stake
-        .accounts({
+        .accountsStrict({
           validator: validator.publicKey,
           protocolConfig: protocolConfigPda,
           validatorState: validatorStatePda,
@@ -186,7 +186,7 @@ describe("iam-registry", () => {
     // Register with 1 SOL
     await program.methods
       .registerValidator(MIN_STAKE)
-      .accounts({
+      .accountsStrict({
         validator: validator.publicKey,
         protocolConfig: protocolConfigPda,
         validatorState: validatorStatePda,
@@ -201,7 +201,7 @@ describe("iam-registry", () => {
     // Unstake
     await program.methods
       .unstakeValidator()
-      .accounts({
+      .accountsStrict({
         validator: validator.publicKey,
         validatorState: validatorStatePda,
         vault: vaultPda,
@@ -242,7 +242,7 @@ describe("iam-registry", () => {
 
     await program.methods
       .registerValidator(MIN_STAKE)
-      .accounts({
+      .accountsStrict({
         validator: validator.publicKey,
         protocolConfig: protocolConfigPda,
         validatorState: validatorStatePda,
@@ -262,7 +262,7 @@ describe("iam-registry", () => {
     try {
       await program.methods
         .unstakeValidator()
-        .accounts({
+        .accountsStrict({
           validator: attacker.publicKey,
           validatorState: validatorStatePda,
           vault: vaultPda,

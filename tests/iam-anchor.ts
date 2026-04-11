@@ -7,8 +7,8 @@ import {
   getAccount,
   transfer,
 } from "@solana/spl-token";
-import { IamAnchor } from "../target/types/iam_anchor";
-import { IamRegistry } from "../target/types/iam_registry";
+import type { IamAnchor } from "../target/types/iam_anchor";
+import type { IamRegistry } from "../target/types/iam_registry";
 
 describe("iam-anchor", () => {
   const provider = anchor.AnchorProvider.env();
@@ -55,7 +55,7 @@ describe("iam-anchor", () => {
           10000,
           100
         )
-        .accounts({
+        .accountsStrict({
           admin: provider.wallet.publicKey,
           protocolConfig: protocolConfigPda,
           systemProgram: anchor.web3.SystemProgram.programId,
@@ -79,7 +79,7 @@ describe("iam-anchor", () => {
 
     await program.methods
       .mintAnchor(Array.from(commitment))
-      .accounts({
+      .accountsStrict({
         user: user.publicKey,
         identityState: identityPda,
         mint: mintPda,
@@ -123,7 +123,7 @@ describe("iam-anchor", () => {
     try {
       await program.methods
         .mintAnchor(Array.from(commitment))
-        .accounts({
+        .accountsStrict({
           user: user.publicKey,
           identityState: identityPda,
           mint: mintPda,
@@ -159,7 +159,7 @@ describe("iam-anchor", () => {
 
     await program.methods
       .mintAnchor(Array.from(commitment))
-      .accounts({
+      .accountsStrict({
         user: user2.publicKey,
         identityState: identityPda,
         mint: mintPda,
@@ -185,7 +185,7 @@ describe("iam-anchor", () => {
 
     await program.methods
       .updateAnchor(Array.from(newCommitment))
-      .accounts({
+      .accountsStrict({
         authority: user.publicKey,
         identityState: identityPda,
         protocolConfig: protocolConfigPda,
@@ -217,7 +217,7 @@ describe("iam-anchor", () => {
     try {
       await program.methods
         .updateAnchor(Array.from(fakeCommitment))
-        .accounts({
+        .accountsStrict({
           authority: attacker.publicKey,
           identityState: identityPda,
           protocolConfig: protocolConfigPda,

@@ -3,7 +3,10 @@ import { Program } from "@coral-xyz/anchor";
 import { expect } from "chai";
 import * as fs from "fs";
 import * as path from "path";
-import { IamVerifier } from "../target/types/iam_verifier";
+import type { IamVerifier } from "../target/types/iam_verifier";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load pre-generated Groth16 proof fixture
 const fixture = JSON.parse(
@@ -57,7 +60,7 @@ describe("iam-verifier", () => {
 
     await program.methods
       .createChallenge(nonce)
-      .accounts({
+      .accountsStrict({
         challenger: provider.wallet.publicKey,
         challenge: challengePda,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -84,7 +87,7 @@ describe("iam-verifier", () => {
 
     await program.methods
       .createChallenge(nonce)
-      .accounts({
+      .accountsStrict({
         challenger: provider.wallet.publicKey,
         challenge: challengePda,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -96,7 +99,7 @@ describe("iam-verifier", () => {
 
     await program.methods
       .verifyProof(proofBytes, publicInputs, nonce)
-      .accounts({
+      .accountsStrict({
         verifier: provider.wallet.publicKey,
         challenge: challengePda,
         verificationResult: verificationPda,
@@ -126,7 +129,7 @@ describe("iam-verifier", () => {
 
     await program.methods
       .createChallenge(nonce)
-      .accounts({
+      .accountsStrict({
         challenger: provider.wallet.publicKey,
         challenge: challengePda,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -141,7 +144,7 @@ describe("iam-verifier", () => {
     try {
       await program.methods
         .verifyProof(tamperedProof, fixture.public_inputs, nonce)
-        .accounts({
+        .accountsStrict({
           verifier: provider.wallet.publicKey,
           challenge: challengePda,
           verificationResult: verificationPda,
@@ -168,7 +171,7 @@ describe("iam-verifier", () => {
 
     await program.methods
       .createChallenge(nonce)
-      .accounts({
+      .accountsStrict({
         challenger: provider.wallet.publicKey,
         challenge: challengePda,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -179,7 +182,7 @@ describe("iam-verifier", () => {
 
     await program.methods
       .verifyProof(proofBytes, fixture.public_inputs, nonce)
-      .accounts({
+      .accountsStrict({
         verifier: provider.wallet.publicKey,
         challenge: challengePda,
         verificationResult: verificationPda,
@@ -190,7 +193,7 @@ describe("iam-verifier", () => {
     try {
       await program.methods
         .verifyProof(proofBytes, fixture.public_inputs, nonce)
-        .accounts({
+        .accountsStrict({
           verifier: provider.wallet.publicKey,
           challenge: challengePda,
           verificationResult: verificationPda,
