@@ -97,6 +97,70 @@ pub mod iam_registry {
         Ok(())
     }
 
+    /// Migrate the protocol admin to a new authority.
+    /// Requires the program upgrade authority, not the current config admin.
+    /// This is an emergency recovery instruction for when the admin keypair is lost.
+    /// Uses raw byte access (not Anchor deserialization) to handle accounts that
+    /// predate the current struct layout.
+    pub fn migrate_admin(ctx: Context<MigrateAdmin>) -> Result<()> {
+        // Verify the signer is the program upgrade authority by reading programdata
+        let programdata_info = &ctx.accounts.programdata;
+        let programdata_data = programdata_info.try_borrow_data()?;
+        // Programdata layout: 4 bytes (state enum) + 8 bytes (slot) + 1 byte (option tag) + 32 bytes (authority)
+        require!(programdata_data.len() >= 45, RegistryError::Unauthorized);
+        require!(programdata_data[12] == 1, RegistryError::Unauthorized); // option tag: Some
+        let authority_bytes = &programdata_data[13..45];
+        let upgrade_authority = Pubkey::try_from(authority_bytes)
+            .map_err(|_| error!(RegistryError::Unauthorized))?;
+        require!(
+            upgrade_authority == ctx.accounts.new_admin.key(),
+            RegistryError::Unauthorized
+        );
+        drop(programdata_data);
+
+        // Read old admin from raw bytes (offset 8, 32 bytes) before overwriting
+        let config_info = &ctx.accounts.protocol_config;
+        let old_admin = {
+            let data = config_info.try_borrow_data()?;
+            require!(data.len() >= 40, RegistryError::Unauthorized);
+            Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(RegistryError::Unauthorized))?
+        };
+
+        // Realloc the account to the new size (zeros new bytes automatically)
+        let new_len = ProtocolConfig::LEN;
+        config_info.realloc(new_len, true)?;
+
+        // Write the new admin pubkey at offset 8
+        let mut data = config_info.try_borrow_mut_data()?;
+        data[8..40].copy_from_slice(ctx.accounts.new_admin.key().as_ref());
+        drop(data);
+
+        // Transfer rent difference to cover the realloc
+        let rent = Rent::get()?;
+        let required = rent.minimum_balance(new_len);
+        let current = config_info.lamports();
+        if required > current {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.new_admin.to_account_info(),
+                        to: config_info.to_account_info(),
+                    },
+                ),
+                required - current,
+            )?;
+        }
+
+        emit!(AdminMigrated {
+            old_admin,
+            new_admin: ctx.accounts.new_admin.key(),
+        });
+
+        Ok(())
+    }
+
     /// Register as a validator by staking SOL.
     pub fn register_validator(ctx: Context<RegisterValidator>, stake_amount: u64) -> Result<()> {
         let config = &ctx.accounts.protocol_config;
@@ -336,6 +400,37 @@ pub struct WithdrawTreasury<'info> {
 }
 
 #[derive(Accounts)]
+pub struct MigrateAdmin<'info> {
+    /// The new admin. Must be the program upgrade authority.
+    #[account(mut)]
+    pub new_admin: Signer<'info>,
+
+    /// CHECK: ProtocolConfig PDA. Read and written via raw bytes to handle
+    /// pre-migration accounts that predate the current struct layout.
+    #[account(
+        mut,
+        seeds = [b"protocol_config"],
+        bump,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    /// CHECK: The program's programdata account containing the upgrade authority.
+    /// Address is validated as the canonical programdata PDA for this program.
+    #[account(
+        constraint = {
+            let (expected_programdata, _) = Pubkey::find_program_address(
+                &[crate::ID.as_ref()],
+                &anchor_lang::solana_program::bpf_loader_upgradeable::id()
+            );
+            programdata.key() == expected_programdata
+        } @ RegistryError::Unauthorized
+    )]
+    pub programdata: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ComputeTrustScore<'info> {
     #[account(
         seeds = [b"protocol_config"],
@@ -400,4 +495,10 @@ pub struct ProtocolConfigUpdated {
 pub struct TreasuryWithdrawn {
     pub admin: Pubkey,
     pub amount: u64,
+}
+
+#[event]
+pub struct AdminMigrated {
+    pub old_admin: Pubkey,
+    pub new_admin: Pubkey,
 }
