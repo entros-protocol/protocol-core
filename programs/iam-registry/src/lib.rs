@@ -34,6 +34,7 @@ pub mod iam_registry {
         challenge_expiry: i64,
         max_trust_score: u16,
         base_trust_increment: u16,
+        verification_fee: u64,
     ) -> Result<()> {
         let config = &mut ctx.accounts.protocol_config;
         config.admin = ctx.accounts.admin.key();
@@ -42,6 +43,57 @@ pub mod iam_registry {
         config.max_trust_score = max_trust_score;
         config.base_trust_increment = base_trust_increment;
         config.bump = ctx.bumps.protocol_config;
+        config.verification_fee = verification_fee;
+        Ok(())
+    }
+
+    /// Update protocol configuration. Admin-only.
+    /// Uses Anchor realloc to resize the account if the struct has grown.
+    pub fn update_protocol_config(
+        ctx: Context<UpdateProtocolConfig>,
+        verification_fee: u64,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.protocol_config;
+        config.verification_fee = verification_fee;
+
+        emit!(ProtocolConfigUpdated {
+            admin: ctx.accounts.admin.key(),
+            verification_fee,
+        });
+
+        Ok(())
+    }
+
+    /// Withdraw accumulated fees from the protocol treasury.
+    /// Admin-only. Preserves rent-exempt minimum balance.
+    pub fn withdraw_treasury(ctx: Context<WithdrawTreasury>, amount: u64) -> Result<()> {
+        let rent = Rent::get()?;
+        let min_balance = rent.minimum_balance(0);
+        let treasury_balance = ctx.accounts.treasury.lamports();
+        let available = treasury_balance.saturating_sub(min_balance);
+        require!(
+            amount <= available,
+            RegistryError::InsufficientTreasuryBalance
+        );
+
+        let treasury_bump = ctx.bumps.treasury;
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.treasury.to_account_info(),
+                    to: ctx.accounts.admin.to_account_info(),
+                },
+                &[&[b"protocol_treasury", &[treasury_bump]]],
+            ),
+            amount,
+        )?;
+
+        emit!(TreasuryWithdrawn {
+            admin: ctx.accounts.admin.key(),
+            amount,
+        });
+
         Ok(())
     }
 
@@ -238,6 +290,52 @@ pub struct RegisterValidator<'info> {
 }
 
 #[derive(Accounts)]
+pub struct UpdateProtocolConfig<'info> {
+    #[account(
+        mut,
+        constraint = protocol_config.admin == admin.key() @ RegistryError::Unauthorized
+    )]
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        realloc = ProtocolConfig::LEN,
+        realloc::payer = admin,
+        realloc::zero = false,
+        seeds = [b"protocol_config"],
+        bump = protocol_config.bump,
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawTreasury<'info> {
+    #[account(
+        mut,
+        constraint = protocol_config.admin == admin.key() @ RegistryError::Unauthorized
+    )]
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"protocol_config"],
+        bump = protocol_config.bump,
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
+    /// CHECK: Treasury PDA. Validated by seeds. Holds accumulated verification fees.
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+    )]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ComputeTrustScore<'info> {
     #[account(
         seeds = [b"protocol_config"],
@@ -289,5 +387,17 @@ pub struct TrustScoreComputed {
 #[event]
 pub struct ValidatorUnstaked {
     pub authority: Pubkey,
+    pub amount: u64,
+}
+
+#[event]
+pub struct ProtocolConfigUpdated {
+    pub admin: Pubkey,
+    pub verification_fee: u64,
+}
+
+#[event]
+pub struct TreasuryWithdrawn {
+    pub admin: Pubkey,
     pub amount: u64,
 }
