@@ -14,6 +14,8 @@ pub struct ProtocolConfig {
     pub base_trust_increment: u16,
     /// PDA bump seed
     pub bump: u8,
+    /// Lamports charged per verification (user-pays model)
+    pub verification_fee: u64,
 }
 
 impl ProtocolConfig {
@@ -23,7 +25,8 @@ impl ProtocolConfig {
         + 8   // challenge_expiry
         + 2   // max_trust_score
         + 2   // base_trust_increment
-        + 1; // bump
+        + 1   // bump
+        + 8; // verification_fee
 }
 
 #[account]

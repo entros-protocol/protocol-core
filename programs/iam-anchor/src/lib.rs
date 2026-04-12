@@ -132,7 +132,33 @@ pub mod iam_anchor {
         identity.current_commitment = initial_commitment;
         identity.mint = ctx.accounts.mint.key();
         identity.bump = ctx.bumps.identity_state;
-        identity.recent_timestamps = [0i64; 10];
+        identity.recent_timestamps = [0i64; 52];
+
+        // Read verification fee from protocol config (cross-program, iam-registry)
+        let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
+        let verification_fee = if config_data.len() >= 69 {
+            u64::from_le_bytes([
+                config_data[61], config_data[62], config_data[63], config_data[64],
+                config_data[65], config_data[66], config_data[67], config_data[68],
+            ])
+        } else {
+            0
+        };
+        drop(config_data);
+
+        // Transfer verification fee from user to protocol treasury
+        if verification_fee > 0 {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.user.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                    },
+                ),
+                verification_fee,
+            )?;
+        }
 
         emit!(AnchorMinted {
             owner: identity.owner,
@@ -161,7 +187,7 @@ pub mod iam_anchor {
         identity.last_verification_timestamp = now;
 
         // Shift recent_timestamps array: drop oldest, prepend newest
-        for i in (1..10).rev() {
+        for i in (1..52).rev() {
             identity.recent_timestamps[i] = identity.recent_timestamps[i - 1];
         }
         identity.recent_timestamps[0] = now;
@@ -170,16 +196,20 @@ pub mod iam_anchor {
         // Layout: 8 disc + 32 admin + 8 min_stake + 8 challenge_expiry = offset 56
         let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
         require!(
-            config_data.len() >= 61,
+            config_data.len() >= 69,
             IamAnchorError::InvalidProtocolConfig
         );
         let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
         let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
+        let verification_fee = u64::from_le_bytes([
+            config_data[61], config_data[62], config_data[63], config_data[64],
+            config_data[65], config_data[66], config_data[67], config_data[68],
+        ]);
 
         // Deduplicate timestamps by calendar day (newest-first order means
         // same-day entries are adjacent). Multiple verifications on the same day
         // count once for scoring — consistency over time, not volume.
-        let mut unique_ts = [0i64; 10];
+        let mut unique_ts = [0i64; 52];
         let mut unique_count: usize = 0;
         let mut prev_day: i64 = -1;
         for ts in identity.recent_timestamps.iter() {
@@ -203,7 +233,7 @@ pub mod iam_anchor {
         let base_score = (recency_score * u64::from(base_trust_increment)) / 100;
 
         // Regularity bonus from gap consistency (unique days only)
-        let mut gaps = [0i64; 9];
+        let mut gaps = [0i64; 51];
         let mut gaps_len = 0usize;
         for i in 0..unique_count.saturating_sub(1) {
             gaps[gaps_len] = (unique_ts[i] - unique_ts[i + 1]) / 86400;
@@ -234,6 +264,23 @@ pub mod iam_anchor {
             .saturating_add(regularity_bonus)
             .saturating_add(age_bonus);
         identity.trust_score = total.min(u64::from(max_trust_score)) as u16;
+
+        // Drop config borrow before CPI (Solana runtime restriction)
+        drop(config_data);
+
+        // Transfer verification fee from user to protocol treasury
+        if verification_fee > 0 {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.authority.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                    },
+                ),
+                verification_fee,
+            )?;
+        }
 
         emit!(AnchorUpdated {
             owner: identity.owner,
@@ -285,14 +332,35 @@ pub struct MintAnchor<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Cross-program read of iam-registry ProtocolConfig PDA.
+    #[account(
+        seeds = [b"protocol_config"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    /// CHECK: Protocol treasury PDA on iam-registry. Receives verification fees.
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub treasury: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct UpdateAnchor<'info> {
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     #[account(
         mut,
+        realloc = IdentityState::LEN,
+        realloc::payer = authority,
+        realloc::zero = true,
         seeds = [b"identity", identity_state.owner.as_ref()],
         bump = identity_state.bump,
         constraint = identity_state.owner == authority.key() @ IamAnchorError::Unauthorized,
@@ -307,6 +375,17 @@ pub struct UpdateAnchor<'info> {
         seeds::program = REGISTRY_PROGRAM_ID,
     )]
     pub protocol_config: UncheckedAccount<'info>,
+
+    /// CHECK: Protocol treasury PDA on iam-registry. Receives verification fees.
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 // --- Events ---

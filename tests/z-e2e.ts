@@ -10,9 +10,6 @@ import {
 import type { IamRegistry } from "../target/types/iam_registry";
 import type { IamAnchor } from "../target/types/iam_anchor";
 import type { IamVerifier } from "../target/types/iam_verifier";
-import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const fixture = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "fixtures/test_proof.json"), "utf-8")
@@ -40,6 +37,11 @@ describe("e2e: full IAM verification flow", () => {
   const [mintAuthorityPda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint_authority")],
     iamAnchor.programId
+  );
+
+  const [treasuryPda] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("protocol_treasury")],
+    registry.programId
   );
 
   const initialCommitment = Buffer.alloc(32);
@@ -115,6 +117,8 @@ describe("e2e: full IAM verification flow", () => {
         associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
         tokenProgram: TOKEN_2022_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
       })
       .signers([e2eUser])
       .rpc();
@@ -177,6 +181,8 @@ describe("e2e: full IAM verification flow", () => {
         authority: e2eUser.publicKey,
         identityState: identityPda,
         protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
       })
       .signers([e2eUser])
       .rpc();

@@ -12,4 +12,6 @@ pub enum RegistryError {
     Unauthorized,
     #[msg("Arithmetic overflow")]
     ArithmeticOverflow,
+    #[msg("Insufficient treasury balance for withdrawal")]
+    InsufficientTreasuryBalance,
 }

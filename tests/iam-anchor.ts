@@ -41,6 +41,11 @@ describe("iam-anchor", () => {
     registry.programId
   );
 
+  const [treasuryPda] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("protocol_treasury")],
+    registry.programId
+  );
+
   const commitment = Buffer.alloc(32);
   commitment.write("initial_commitment_test", "utf-8");
 
@@ -53,7 +58,8 @@ describe("iam-anchor", () => {
           new anchor.BN(1_000_000_000),
           new anchor.BN(300),
           10000,
-          100
+          100,
+          new anchor.BN(0)
         )
         .accountsStrict({
           admin: provider.wallet.publicKey,
@@ -88,6 +94,8 @@ describe("iam-anchor", () => {
         associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
         tokenProgram: TOKEN_2022_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
       })
       .rpc();
 
@@ -168,6 +176,8 @@ describe("iam-anchor", () => {
         associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
         tokenProgram: TOKEN_2022_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
       })
       .signers([user2])
       .rpc();
@@ -189,6 +199,8 @@ describe("iam-anchor", () => {
         authority: user.publicKey,
         identityState: identityPda,
         protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
       })
       .rpc();
 
@@ -228,6 +240,50 @@ describe("iam-anchor", () => {
     } catch (err: any) {
       expect(err).to.exist;
     }
+  });
+
+  it("charges verification fee on update_anchor", async () => {
+    const user = provider.wallet;
+    const [identityPda] = deriveIdentityPda(user.publicKey);
+
+    // Set verification fee to 5_000_000 lamports (0.005 SOL)
+    await registry.methods
+      .updateProtocolConfig(new anchor.BN(5_000_000))
+      .accountsStrict({
+        admin: user.publicKey,
+        protocolConfig: protocolConfigPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const treasuryBefore = await provider.connection.getBalance(treasuryPda);
+
+    const feeCommitment = Buffer.alloc(32);
+    feeCommitment.write("fee_test_commitment!!!!!", "utf-8");
+
+    await program.methods
+      .updateAnchor(Array.from(feeCommitment))
+      .accountsStrict({
+        authority: user.publicKey,
+        identityState: identityPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const treasuryAfter = await provider.connection.getBalance(treasuryPda);
+    expect(treasuryAfter).to.equal(treasuryBefore + 5_000_000);
+
+    // Reset fee to 0
+    await registry.methods
+      .updateProtocolConfig(new anchor.BN(0))
+      .accountsStrict({
+        admin: user.publicKey,
+        protocolConfig: protocolConfigPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
   });
 
   it("rejects transfer of non-transferable token", async () => {

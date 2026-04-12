@@ -20,10 +20,16 @@ describe("iam-registry", () => {
     program.programId
   );
 
+  const [treasuryPda] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("protocol_treasury")],
+    program.programId
+  );
+
   const MIN_STAKE = new anchor.BN(1_000_000_000); // 1 SOL
   const CHALLENGE_EXPIRY = new anchor.BN(300);
   const MAX_TRUST_SCORE = 10000;
   const BASE_TRUST_INCREMENT = 100;
+  const VERIFICATION_FEE = new anchor.BN(0); // 0 for existing tests
 
   it("initializes protocol config", async () => {
     // May already be initialized by iam-anchor's before block (alphabetical test ordering).
@@ -34,7 +40,8 @@ describe("iam-registry", () => {
           MIN_STAKE,
           CHALLENGE_EXPIRY,
           MAX_TRUST_SCORE,
-          BASE_TRUST_INCREMENT
+          BASE_TRUST_INCREMENT,
+          VERIFICATION_FEE
         )
         .accountsStrict({
           admin: admin.publicKey,
@@ -61,7 +68,8 @@ describe("iam-registry", () => {
           MIN_STAKE,
           CHALLENGE_EXPIRY,
           MAX_TRUST_SCORE,
-          BASE_TRUST_INCREMENT
+          BASE_TRUST_INCREMENT,
+          VERIFICATION_FEE
         )
         .accountsStrict({
           admin: admin.publicKey,
@@ -297,5 +305,131 @@ describe("iam-registry", () => {
       .rpc();
 
     program.removeEventListener(listener);
+  });
+
+  it("updates protocol config with verification fee", async () => {
+    await program.methods
+      .updateProtocolConfig(new anchor.BN(5_000_000))
+      .accountsStrict({
+        admin: admin.publicKey,
+        protocolConfig: protocolConfigPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const config = await program.account.protocolConfig.fetch(protocolConfigPda);
+    expect(config.verificationFee.toNumber()).to.equal(5_000_000);
+
+    // Reset to 0 for other tests
+    await program.methods
+      .updateProtocolConfig(new anchor.BN(0))
+      .accountsStrict({
+        admin: admin.publicKey,
+        protocolConfig: protocolConfigPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+  });
+
+  it("rejects update_protocol_config from non-admin", async () => {
+    const attacker = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      attacker.publicKey,
+      2_000_000_000
+    );
+    await provider.connection.confirmTransaction(sig);
+
+    try {
+      await program.methods
+        .updateProtocolConfig(new anchor.BN(999))
+        .accountsStrict({
+          admin: attacker.publicKey,
+          protocolConfig: protocolConfigPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([attacker])
+        .rpc();
+      expect.fail("Should have thrown — non-admin cannot update config");
+    } catch (err: any) {
+      expect(err).to.exist;
+    }
+  });
+
+  it("withdraws from treasury", async () => {
+    // Send SOL to treasury PDA to simulate accumulated fees
+    const depositAmount = 100_000_000; // 0.1 SOL
+    const depositTx = new anchor.web3.Transaction().add(
+      anchor.web3.SystemProgram.transfer({
+        fromPubkey: admin.publicKey,
+        toPubkey: treasuryPda,
+        lamports: depositAmount,
+      })
+    );
+    await provider.sendAndConfirm(depositTx);
+
+    const treasuryBefore = await provider.connection.getBalance(treasuryPda);
+    const adminBefore = await provider.connection.getBalance(admin.publicKey);
+
+    const withdrawAmount = 50_000_000; // 0.05 SOL
+    await program.methods
+      .withdrawTreasury(new anchor.BN(withdrawAmount))
+      .accountsStrict({
+        admin: admin.publicKey,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const treasuryAfter = await provider.connection.getBalance(treasuryPda);
+    const adminAfter = await provider.connection.getBalance(admin.publicKey);
+
+    expect(treasuryAfter).to.equal(treasuryBefore - withdrawAmount);
+    // Admin balance increases by withdrawal minus tx fee
+    expect(adminAfter).to.be.greaterThan(adminBefore);
+  });
+
+  it("rejects treasury withdrawal from non-admin", async () => {
+    const attacker = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      attacker.publicKey,
+      2_000_000_000
+    );
+    await provider.connection.confirmTransaction(sig);
+
+    try {
+      await program.methods
+        .withdrawTreasury(new anchor.BN(1_000))
+        .accountsStrict({
+          admin: attacker.publicKey,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([attacker])
+        .rpc();
+      expect.fail("Should have thrown — non-admin cannot withdraw");
+    } catch (err: any) {
+      expect(err).to.exist;
+    }
+  });
+
+  it("rejects treasury withdrawal exceeding available balance", async () => {
+    const treasuryBalance = await provider.connection.getBalance(treasuryPda);
+
+    try {
+      await program.methods
+        .withdrawTreasury(new anchor.BN(treasuryBalance + 1_000_000_000))
+        .accountsStrict({
+          admin: admin.publicKey,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+      expect.fail("Should have thrown — insufficient treasury balance");
+    } catch (err: any) {
+      expect(err).to.exist;
+    }
   });
 });

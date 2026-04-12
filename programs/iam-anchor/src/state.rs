@@ -18,13 +18,14 @@ pub struct IdentityState {
     pub mint: Pubkey,
     /// PDA bump seed
     pub bump: u8,
-    /// Timestamps of last 10 verifications (newest at index 0).
-    /// Used by the registry to compute progressive trust scores.
-    pub recent_timestamps: [i64; 10],
+    /// Timestamps of last 52 verifications (newest at index 0).
+    /// 52 slots covers 1 year of weekly or 4+ years of monthly verifications.
+    /// Older entries contribute negligible score due to exponential recency decay.
+    pub recent_timestamps: [i64; 52],
 }
 
 impl IdentityState {
-    pub const LEN: usize = 8  // discriminator
+    pub const LEN: usize = 8   // discriminator
         + 32  // owner
         + 8   // creation_timestamp
         + 8   // last_verification_timestamp
@@ -33,5 +34,5 @@ impl IdentityState {
         + 32  // current_commitment
         + 32  // mint
         + 1   // bump
-        + 80; // recent_timestamps (10 × 8 bytes)
+        + 416; // recent_timestamps (52 × 8 bytes)
 }

@@ -34,6 +34,7 @@ pub mod iam_registry {
         challenge_expiry: i64,
         max_trust_score: u16,
         base_trust_increment: u16,
+        verification_fee: u64,
     ) -> Result<()> {
         let config = &mut ctx.accounts.protocol_config;
         config.admin = ctx.accounts.admin.key();
@@ -42,6 +43,121 @@ pub mod iam_registry {
         config.max_trust_score = max_trust_score;
         config.base_trust_increment = base_trust_increment;
         config.bump = ctx.bumps.protocol_config;
+        config.verification_fee = verification_fee;
+        Ok(())
+    }
+
+    /// Update protocol configuration. Admin-only.
+    /// Uses Anchor realloc to resize the account if the struct has grown.
+    pub fn update_protocol_config(
+        ctx: Context<UpdateProtocolConfig>,
+        verification_fee: u64,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.protocol_config;
+        config.verification_fee = verification_fee;
+
+        emit!(ProtocolConfigUpdated {
+            admin: ctx.accounts.admin.key(),
+            verification_fee,
+        });
+
+        Ok(())
+    }
+
+    /// Withdraw accumulated fees from the protocol treasury.
+    /// Admin-only. Preserves rent-exempt minimum balance.
+    pub fn withdraw_treasury(ctx: Context<WithdrawTreasury>, amount: u64) -> Result<()> {
+        let rent = Rent::get()?;
+        let min_balance = rent.minimum_balance(0);
+        let treasury_balance = ctx.accounts.treasury.lamports();
+        let available = treasury_balance.saturating_sub(min_balance);
+        require!(
+            amount <= available,
+            RegistryError::InsufficientTreasuryBalance
+        );
+
+        let treasury_bump = ctx.bumps.treasury;
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.treasury.to_account_info(),
+                    to: ctx.accounts.admin.to_account_info(),
+                },
+                &[&[b"protocol_treasury", &[treasury_bump]]],
+            ),
+            amount,
+        )?;
+
+        emit!(TreasuryWithdrawn {
+            admin: ctx.accounts.admin.key(),
+            amount,
+        });
+
+        Ok(())
+    }
+
+    /// Migrate the protocol admin to a new authority.
+    /// Requires the program upgrade authority, not the current config admin.
+    /// This is an emergency recovery instruction for when the admin keypair is lost.
+    /// Uses raw byte access (not Anchor deserialization) to handle accounts that
+    /// predate the current struct layout.
+    pub fn migrate_admin(ctx: Context<MigrateAdmin>) -> Result<()> {
+        // Verify the signer is the program upgrade authority by reading programdata
+        let programdata_info = &ctx.accounts.programdata;
+        let programdata_data = programdata_info.try_borrow_data()?;
+        // Programdata layout: 4 bytes (state enum) + 8 bytes (slot) + 1 byte (option tag) + 32 bytes (authority)
+        require!(programdata_data.len() >= 45, RegistryError::Unauthorized);
+        require!(programdata_data[12] == 1, RegistryError::Unauthorized); // option tag: Some
+        let authority_bytes = &programdata_data[13..45];
+        let upgrade_authority = Pubkey::try_from(authority_bytes)
+            .map_err(|_| error!(RegistryError::Unauthorized))?;
+        require!(
+            upgrade_authority == ctx.accounts.new_admin.key(),
+            RegistryError::Unauthorized
+        );
+        drop(programdata_data);
+
+        // Read old admin from raw bytes (offset 8, 32 bytes) before overwriting
+        let config_info = &ctx.accounts.protocol_config;
+        let old_admin = {
+            let data = config_info.try_borrow_data()?;
+            require!(data.len() >= 40, RegistryError::Unauthorized);
+            Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(RegistryError::Unauthorized))?
+        };
+
+        // Realloc the account to the new size (zeros new bytes automatically)
+        let new_len = ProtocolConfig::LEN;
+        config_info.realloc(new_len, true)?;
+
+        // Write the new admin pubkey at offset 8
+        let mut data = config_info.try_borrow_mut_data()?;
+        data[8..40].copy_from_slice(ctx.accounts.new_admin.key().as_ref());
+        drop(data);
+
+        // Transfer rent difference to cover the realloc
+        let rent = Rent::get()?;
+        let required = rent.minimum_balance(new_len);
+        let current = config_info.lamports();
+        if required > current {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.new_admin.to_account_info(),
+                        to: config_info.to_account_info(),
+                    },
+                ),
+                required - current,
+            )?;
+        }
+
+        emit!(AdminMigrated {
+            old_admin,
+            new_admin: ctx.accounts.new_admin.key(),
+        });
+
         Ok(())
     }
 
@@ -238,6 +354,83 @@ pub struct RegisterValidator<'info> {
 }
 
 #[derive(Accounts)]
+pub struct UpdateProtocolConfig<'info> {
+    #[account(
+        mut,
+        constraint = protocol_config.admin == admin.key() @ RegistryError::Unauthorized
+    )]
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        realloc = ProtocolConfig::LEN,
+        realloc::payer = admin,
+        realloc::zero = false,
+        seeds = [b"protocol_config"],
+        bump = protocol_config.bump,
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawTreasury<'info> {
+    #[account(
+        mut,
+        constraint = protocol_config.admin == admin.key() @ RegistryError::Unauthorized
+    )]
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"protocol_config"],
+        bump = protocol_config.bump,
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
+    /// CHECK: Treasury PDA. Validated by seeds. Holds accumulated verification fees.
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+    )]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateAdmin<'info> {
+    /// The new admin. Must be the program upgrade authority.
+    #[account(mut)]
+    pub new_admin: Signer<'info>,
+
+    /// CHECK: ProtocolConfig PDA. Read and written via raw bytes to handle
+    /// pre-migration accounts that predate the current struct layout.
+    #[account(
+        mut,
+        seeds = [b"protocol_config"],
+        bump,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    /// CHECK: The program's programdata account containing the upgrade authority.
+    /// Address is validated as the canonical programdata PDA for this program.
+    #[account(
+        constraint = {
+            let (expected_programdata, _) = Pubkey::find_program_address(
+                &[crate::ID.as_ref()],
+                &anchor_lang::solana_program::bpf_loader_upgradeable::id()
+            );
+            programdata.key() == expected_programdata
+        } @ RegistryError::Unauthorized
+    )]
+    pub programdata: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ComputeTrustScore<'info> {
     #[account(
         seeds = [b"protocol_config"],
@@ -290,4 +483,22 @@ pub struct TrustScoreComputed {
 pub struct ValidatorUnstaked {
     pub authority: Pubkey,
     pub amount: u64,
+}
+
+#[event]
+pub struct ProtocolConfigUpdated {
+    pub admin: Pubkey,
+    pub verification_fee: u64,
+}
+
+#[event]
+pub struct TreasuryWithdrawn {
+    pub admin: Pubkey,
+    pub amount: u64,
+}
+
+#[event]
+pub struct AdminMigrated {
+    pub old_admin: Pubkey,
+    pub new_admin: Pubkey,
 }
