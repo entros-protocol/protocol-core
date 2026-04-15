@@ -24,6 +24,6 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "NODE_OPTIONS='--no-experimental-strip-types' npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
-test1 = "NODE_OPTIONS='--no-experimental-strip-types' npx ts-mocha -p ./tsconfig.json -t 1000000 tests/iam-anchor.ts"
-test2 = "NODE_OPTIONS='--no-experimental-strip-types' npx ts-mocha -p ./tsconfig.json -t 1000000 tests/iam-registry.ts"
-test3 = "NODE_OPTIONS='--no-experimental-strip-types' npx ts-mocha -p ./tsconfig.json -t 1000000 tests/iam-verifier.ts"
+test-anchor = "NODE_OPTIONS='--no-experimental-strip-types' npx ts-mocha -p ./tsconfig.json -t 1000000 tests/iam-anchor.ts"
+test-registry = "NODE_OPTIONS='--no-experimental-strip-types' npx ts-mocha -p ./tsconfig.json -t 1000000 tests/iam-registry.ts"
+test-verifier = "NODE_OPTIONS='--no-experimental-strip-types' npx ts-mocha -p ./tsconfig.json -t 1000000 tests/iam-verifier.ts"

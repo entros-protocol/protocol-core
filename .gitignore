@@ -6,3 +6,6 @@ test-ledger
 .yarn
 *.key
 .env
+justfile
+biome
+biome.json
