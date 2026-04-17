@@ -5,6 +5,7 @@ use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_2022;
 use anchor_spl::token_interface::TokenInterface;
+use solana_security_txt::security_txt;
 
 mod errors;
 mod state;
@@ -13,6 +14,14 @@ use errors::IamAnchorError;
 use state::IdentityState;
 
 declare_id!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
+
+security_txt! {
+    name: "IAM Anchor",
+    project_url: "https://iamprotocol.io",
+    contacts: "email:contact@iamprotocol.io",
+    policy: "https://iamprotocol.io/security",
+    source_code: "https://github.com/iam-protocol/protocol-core"
+}
 
 /// iam-registry program ID for cross-program ProtocolConfig PDA validation.
 /// Decoded from: 6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW
