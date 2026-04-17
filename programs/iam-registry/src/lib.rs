@@ -2,6 +2,7 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+use solana_security_txt::security_txt;
 
 mod errors;
 mod state;
@@ -22,6 +23,14 @@ fn isqrt(n: u64) -> u64 {
 }
 
 declare_id!("6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW");
+
+security_txt! {
+    name: "IAM Registry",
+    project_url: "https://iamprotocol.io",
+    contacts: "email:contact@iamprotocol.io",
+    policy: "https://iamprotocol.io/security",
+    source_code: "https://github.com/iam-protocol/protocol-core"
+}
 
 #[program]
 pub mod iam_registry {

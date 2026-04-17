@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 
 use anchor_lang::prelude::*;
+use solana_security_txt::security_txt;
 
 mod errors;
 mod groth16_verifier;
@@ -13,6 +14,14 @@ use errors::VerifierError;
 use state::{Challenge, VerificationResult};
 
 declare_id!("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV");
+
+security_txt! {
+    name: "IAM Verifier",
+    project_url: "https://iamprotocol.io",
+    contacts: "email:contact@iamprotocol.io",
+    policy: "https://iamprotocol.io/security",
+    source_code: "https://github.com/iam-protocol/protocol-core"
+}
 
 /// Default challenge expiry in seconds (5 minutes).
 /// In production, this is read from ProtocolConfig via CPI.

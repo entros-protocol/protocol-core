@@ -187,4 +187,34 @@ describe("iam-verifier", () => {
       expect(err).to.exist;
     }
   });
+
+  it("create_challenge with zero nonce should fail with error code 6006", async () => {
+    const nonce = new Array(32).fill(0);
+    const [challengePda] = deriveChallengePda(
+      provider.wallet.publicKey,
+      nonce,
+      iamVerifierProgId,
+    );
+    const [_verificationPda] = deriveVerificationPda(
+      provider.wallet.publicKey,
+      nonce,
+      iamVerifierProgId,
+    );
+
+    try {
+      await program.methods
+        .createChallenge(nonce)
+        .accountsStrict({
+          challenger: provider.wallet.publicKey,
+          challenge: challengePda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+      expect.fail("Should have thrown");
+    } catch (err: any) {
+      expect(err).to.exist;
+      expect(err.error.errorCode.number).to.equal(6006);
+      expect(err.error.errorCode.code).to.equal("InvalidNonce");
+    }
+  });
 });

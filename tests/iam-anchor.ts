@@ -9,7 +9,15 @@ import {
 import { expect } from "chai";
 import type { IamAnchor } from "../target/types/iam_anchor";
 import type { IamRegistry } from "../target/types/iam_registry";
-import { deriveIdentityPda, deriveMintPda } from "./utils";
+import type { IamVerifier } from "../target/types/iam_verifier";
+import {
+  deriveChallengePda,
+  deriveIdentityPda,
+  deriveMintPda,
+  deriveVerificationPda,
+  generateNonce,
+  loadProofFixture,
+} from "./utils";
 
 describe("iam-anchor", () => {
   const provider = anchor.AnchorProvider.env();
@@ -17,8 +25,12 @@ describe("iam-anchor", () => {
 
   const program = anchor.workspace.iamAnchor as Program<IamAnchor>;
   const registry = anchor.workspace.iamRegistry as Program<IamRegistry>;
-
   const iamAnchorProgId = program.programId;
+
+  const iamVerifier = anchor.workspace.iamVerifier as Program<IamVerifier>;
+  const iamVerifierProgId = iamVerifier.programId;
+  let trustScore1vrf: number;
+  let trustScore2vrf: number;
 
   const [mintAuthorityPda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint_authority")],
@@ -199,10 +211,12 @@ describe("iam-anchor", () => {
     expect(identity.verificationCount).to.equal(1);
     // Trust score is auto-computed: brand-new identity with 1 verification
     // recency_score = 3000/30 = 100, base = (100/100)*100 = 100, age ~0 days
+    console.log("1 verif trustScore:", identity.trustScore);
     expect(identity.trustScore).to.be.greaterThanOrEqual(100);
     expect(Buffer.from(identity.currentCommitment)).to.deep.equal(
       newCommitment,
     );
+    trustScore1vrf = identity.trustScore;
   });
 
   it("rejects update from unauthorized wallet", async () => {
@@ -325,5 +339,72 @@ describe("iam-anchor", () => {
       // Token-2022 NonTransferable extension rejects transfers
       expect(err).to.exist;
     }
+  });
+
+  it("trust score should not change after multiple verifications on the same-day", async () => {
+    const user = provider.wallet;
+    const [identityPda] = deriveIdentityPda(user.publicKey, iamAnchorProgId);
+
+    let identity = await program.account.identityState.fetch(identityPda);
+    expect(identity.verificationCount).to.equal(2);
+    trustScore2vrf = identity.trustScore;
+    console.log("2 verif trustScore:", trustScore2vrf);
+    expect(trustScore2vrf).to.equal(trustScore1vrf);
+
+    //-----------== iamVerifier
+    const nonce = generateNonce();
+    const [challengePda] = deriveChallengePda(
+      provider.wallet.publicKey,
+      nonce,
+      iamVerifierProgId,
+    );
+    const [verificationPda] = deriveVerificationPda(
+      provider.wallet.publicKey,
+      nonce,
+      iamVerifierProgId,
+    );
+
+    await iamVerifier.methods
+      .createChallenge(nonce)
+      .accountsStrict({
+        challenger: provider.wallet.publicKey,
+        challenge: challengePda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const fixture = loadProofFixture();
+    const proofBytes = Buffer.from(fixture.proof_bytes);
+    const publicInputs: number[][] = fixture.public_inputs;
+
+    await iamVerifier.methods
+      .verifyProof(proofBytes, publicInputs, nonce)
+      .accountsStrict({
+        verifier: provider.wallet.publicKey,
+        challenge: challengePda,
+        verificationResult: verificationPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    //-----------== iamAnchor: updates identity state with auto-computed trust score
+    const newCommitment = Buffer.alloc(32);
+    newCommitment.write("dedup_trust_score_test!!!", "utf-8");
+
+    await program.methods
+      .updateAnchor(Array.from(newCommitment))
+      .accountsStrict({
+        authority: user.publicKey,
+        identityState: identityPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    identity = await program.account.identityState.fetch(identityPda);
+    expect(identity.verificationCount).to.equal(3);
+    console.log("3 verif trustScore:", identity.trustScore);
+    expect(identity.trustScore).to.equal(trustScore2vrf);
   });
 });

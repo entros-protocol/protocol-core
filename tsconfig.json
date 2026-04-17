@@ -6,6 +6,8 @@
     "module": "commonjs",
     "target": "es6",
     "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "strict": true,
     "rootDir": "."
   }

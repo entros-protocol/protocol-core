@@ -1101,6 +1101,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "blake3",
+ "solana-security-txt",
  "spl-token-2022 9.0.0",
 ]
 
@@ -1109,6 +1110,7 @@ name = "iam-registry"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "solana-security-txt",
 ]
 
 [[package]]
@@ -1117,6 +1119,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "groth16-solana",
+ "solana-security-txt",
 ]
 
 [[package]]
