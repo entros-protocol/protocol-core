@@ -16,7 +16,7 @@ import {
 import { numToBytes } from "./encodeDecode.ts";
 
 export let svm = new LiteSVM();
-
+export const zero = BigInt(0);
 export const ownerKp = new Keypair();
 export const adminKp = new Keypair();
 export const user1Kp = new Keypair();

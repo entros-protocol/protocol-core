@@ -1,5 +1,4 @@
 import { test } from "node:test";
-import * as anchor from "@coral-xyz/anchor";
 import {
   Keypair,
   LAMPORTS_PER_SOL,
@@ -8,13 +7,12 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { expect } from "chai";
-import type { IamAnchor } from "../target/types/iam_anchor";
-import type { IamRegistry } from "../target/types/iam_registry";
 import { decodeProtocolConfigWeb3js } from "./encodeDecode.ts";
 import {
   acctEqual,
   acctIsNull,
   adminKp,
+  iamAnchorAddr,
   initializeProtocol,
   readAcct,
   registryAddr,
@@ -27,21 +25,17 @@ $ anchor build
 Then Install NodeJs v25.9.0(or above v22.18.0) to run this TypeScript Natively: node ./file_path/this_file.ts
 Or use Bun: bun test ./file_path/this_file.ts
 */
-const iamAnchor = anchor.workspace.iamAnchor as anchor.Program<IamAnchor>;
-const iamAnchorProgId = iamAnchor.programId;
 
-const registry = anchor.workspace.iamRegistry as anchor.Program<IamRegistry>;
-
-const [mintAuthorityPda] = anchor.web3.PublicKey.findProgramAddressSync(
+const [mintAuthorityPda] = PublicKey.findProgramAddressSync(
   [Buffer.from("mint_authority")],
-  iamAnchorProgId,
+  iamAnchorAddr,
 );
 console.log("mintAuthorityPda:", mintAuthorityPda.toBase58());
 
 const [protocolConfigPda, protocolConfigBump] =
-  anchor.web3.PublicKey.findProgramAddressSync(
+  PublicKey.findProgramAddressSync(
     [Buffer.from("protocol_config")],
-    registry.programId,
+    registryAddr,
   );
 
 const commitment = Buffer.alloc(32);
@@ -55,7 +49,7 @@ test("one transfer", () => {
   svm.airdrop(payer.publicKey, BigInt(LAMPORTS_PER_SOL));
   const receiver = PublicKey.unique();
   const blockhash = svm.latestBlockhash();
-  const transferLamports = 1_000_000n;
+  const transferLamports = BigInt(1_000_000);
   const ixs = [
     SystemProgram.transfer({
       fromPubkey: payer.publicKey,
@@ -75,11 +69,11 @@ test("one transfer", () => {
 test("registry.initializeProtocol()", async () => {
   signerKp = adminKp;
   signer = signerKp.publicKey;
-  const min_stake = 1_000_000_000n;
-  const challenge_expiry = 300n; //i64,
+  const min_stake = BigInt(1_000_000_000);
+  const challenge_expiry = BigInt(300); //i64,
   const max_trust_score = 10000; //u16,
   const base_trust_increment = 100; //u16,
-  const verification_fee = 0n;
+  const verification_fee = BigInt(0);
   acctIsNull(protocolConfigPda);
   initializeProtocol(
     signerKp,

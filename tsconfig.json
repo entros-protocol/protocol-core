@@ -4,7 +4,7 @@
     "typeRoots": ["./node_modules/@types"],
     "lib": ["es2015"],
     "module": "commonjs",
-    "target": "es2025",
+    "target": "es6",
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,

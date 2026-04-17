@@ -91,12 +91,12 @@ export type ProtocolConfigAcctWeb3js = {
 
 //-------------==
 export const numToBytes = (input: bigint | number, bit = 64) => {
-  let amtBigint = 0n;
+  let amtBigint = BigInt(0);
   if (typeof input === "number") {
     if (input < 0) throw new Error("input < 0");
     amtBigint = BigInt(input);
   } else {
-    if (input < 0n) throw new Error("input < 0");
+    if (input < BigInt(0)) throw new Error("input < 0");
     amtBigint = input;
   }
   const amtLam = lamports(amtBigint);
