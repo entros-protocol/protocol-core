@@ -6,6 +6,7 @@ import type {
 import {
   fixDecoderSize,
   getAddressDecoder,
+  getArrayDecoder,
   getBytesDecoder,
   getI64Decoder,
   getLamportsEncoder,
@@ -16,14 +17,136 @@ import {
   getU8Encoder,
   getU16Decoder,
   getU16Encoder,
+  getU32Decoder,
   getU32Encoder,
   getU64Decoder,
   getU64Encoder,
   lamports,
 } from "@solana/kit";
-import { PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { iamAnchorAddr, registryAddr, verifierAddr } from "./litesvm-utils.ts";
 
+//-----------==
+export const [treasuryPda] = PublicKey.findProgramAddressSync(
+  [Buffer.from("protocol_treasury")],
+  registryAddr,
+);
+console.log("treasuryPda:", treasuryPda.toBase58());
+//-----------== iamVerifier
+//export const loadProofFixture = () => {}
+
+export const generateNonce = (): number[] =>
+  Array.from(Keypair.generate().publicKey.toBytes());
+export const deriveChallengePda = (challenger: PublicKey, nonce: number[]) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("challenge"), challenger.toBuffer(), Buffer.from(nonce)],
+    verifierAddr,
+  );
+export const deriveVerificationPda = (verifier: PublicKey, nonce: number[]) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("verification"), verifier.toBuffer(), Buffer.from(nonce)],
+    verifierAddr,
+  );
+//-----------== iamAnchor
+export const deriveMintPda = (user: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("mint"), user.toBuffer()],
+    iamAnchorAddr,
+  );
+export const [mintAuthorityPda] = PublicKey.findProgramAddressSync(
+  [Buffer.from("mint_authority")],
+  iamAnchorAddr,
+);
+console.log("mintAuthorityPda:", mintAuthorityPda.toBase58());
+
+//-----------== IdentityState
+export const deriveIdentityPda = (user: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("identity"), user.toBuffer()],
+    iamAnchorAddr,
+  );
+export type IdentityStateAcct = {
+  anchorDiscriminator: ReadonlyUint8Array;
+  owner: Address;
+  creation_timestamp: bigint;
+  last_verification_timestamp: bigint;
+  verification_count: number;
+  trust_score: number;
+  current_commitment: ReadonlyUint8Array; //len = 32
+  mint: Address;
+  bump: number;
+  recent_timestamps: bigint[]; //len = 52; BigInt64Array
+};
+export const identityStateAcctDecoder: FixedSizeDecoder<IdentityStateAcct> =
+  getStructDecoder([
+    ["anchorDiscriminator", fixDecoderSize(getBytesDecoder(), 8)], //only for accounts made by Anchor
+    ["owner", getAddressDecoder()],
+    ["creation_timestamp", getI64Decoder()],
+    ["last_verification_timestamp", getI64Decoder()],
+    ["verification_count", getU32Decoder()],
+    ["trust_score", getU16Decoder()],
+    ["current_commitment", fixDecoderSize(getBytesDecoder(), 32)],
+    ["mint", getAddressDecoder()],
+    ["bump", getU8Decoder()],
+    ["recent_timestamps", getArrayDecoder(getI64Decoder(), { size: 52 })],
+  ]);
+export const decodeIdentityState = (
+  bytes: ReadonlyUint8Array | Uint8Array<ArrayBufferLike>,
+  isVerbose = false,
+) => {
+  const decoded = identityStateAcctDecoder.decode(bytes);
+  if (isVerbose) {
+    console.log("owner:", decoded.owner);
+    console.log("creation_timestamp:", decoded.creation_timestamp);
+    console.log(
+      "last_verification_timestamp:",
+      decoded.last_verification_timestamp,
+    );
+    console.log("verification_count:", decoded.verification_count);
+    console.log("trust_score:", decoded.trust_score);
+    console.log("current_commitment:", decoded.current_commitment);
+    console.log("mint:", decoded.mint);
+    console.log("bump:", decoded.bump);
+    console.log("recent_timestamps:", decoded.recent_timestamps);
+  }
+  return decoded;
+};
+// This below is only used for @solana/web3.js as it is outputing PublicKey, not Address
+export const decodeIdentityStateWeb3js = (
+  bytes: ReadonlyUint8Array | Uint8Array<ArrayBufferLike> | undefined,
+) => {
+  if (!bytes) throw new Error("bytes invalid");
+  const decoded = decodeIdentityState(bytes, true);
+  const decodedV1: IdentityStateAcctWeb3js = {
+    owner: new PublicKey(decoded.owner.toString()),
+    creation_timestamp: decoded.creation_timestamp,
+    last_verification_timestamp: decoded.last_verification_timestamp,
+    verification_count: decoded.verification_count,
+    trust_score: decoded.trust_score,
+    bump: decoded.bump,
+    current_commitment: decoded.current_commitment,
+    mint: new PublicKey(decoded.mint.toString()),
+    recent_timestamps: decoded.recent_timestamps,
+  };
+  return decodedV1;
+};
+export type IdentityStateAcctWeb3js = {
+  owner: PublicKey;
+  creation_timestamp: bigint;
+  last_verification_timestamp: bigint;
+  verification_count: number;
+  trust_score: number;
+  current_commitment: ReadonlyUint8Array;
+  mint: PublicKey;
+  bump: number;
+  recent_timestamps: bigint[];
+};
 //-----------== ProtocolConfigPDA
+export const [protocolConfigPda, protocolConfigBump] =
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("protocol_config")],
+    registryAddr,
+  );
 export type ProtocolConfigAcct = {
   anchorDiscriminator: ReadonlyUint8Array;
   admin: Address;
@@ -89,7 +212,7 @@ export type ProtocolConfigAcctWeb3js = {
   verification_fee: bigint;
 };
 
-//-------------==
+//-------------== Encode numbers
 export const numToBytes = (input: bigint | number, bit = 64) => {
   let amtBigint = BigInt(0);
   if (typeof input === "number") {

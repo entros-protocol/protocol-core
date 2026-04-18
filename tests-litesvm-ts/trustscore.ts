@@ -7,12 +7,15 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { expect } from "chai";
-import { decodeProtocolConfigWeb3js } from "./encodeDecode.ts";
+import {
+  decodeProtocolConfigWeb3js,
+  protocolConfigBump,
+  protocolConfigPda,
+} from "./encodeDecode.ts";
 import {
   acctEqual,
   acctIsNull,
   adminKp,
-  iamAnchorAddr,
   initializeProtocol,
   readAcct,
   registryAddr,
@@ -26,25 +29,13 @@ Then Install NodeJs v25.9.0(or above v22.18.0) to run this TypeScript Natively: 
 Or use Bun: bun test ./file_path/this_file.ts
 */
 
-const [mintAuthorityPda] = PublicKey.findProgramAddressSync(
-  [Buffer.from("mint_authority")],
-  iamAnchorAddr,
-);
-console.log("mintAuthorityPda:", mintAuthorityPda.toBase58());
-
-const [protocolConfigPda, protocolConfigBump] =
-  PublicKey.findProgramAddressSync(
-    [Buffer.from("protocol_config")],
-    registryAddr,
-  );
-
 const commitment = Buffer.alloc(32);
 commitment.write("initial_commitment_test", "utf-8");
 
 let signerKp: Keypair;
 let signer: PublicKey;
 
-test("one transfer", () => {
+test("transfer SOL", () => {
   const payer = new Keypair();
   svm.airdrop(payer.publicKey, BigInt(LAMPORTS_PER_SOL));
   const receiver = PublicKey.unique();

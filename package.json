@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "test": "anchor test",
-    "test-litesvm": "node ./tests-litesvm-ts/trustscore.ts"
+    "litesvm-initial": "node ./tests-litesvm-ts/trustscore.ts",
+    "litesvm-trustscore": "node ./tests-litesvm-ts/clock-tests.ts"
   },
   "overrides": {
     "serialize-javascript": ">=7.0.3",

@@ -1,3 +1,4 @@
+import { AccountLayout } from "@solana/spl-token";
 import {
   Keypair,
   LAMPORTS_PER_SOL,
@@ -64,16 +65,41 @@ export const acctEqual = (acct1: PublicKey | undefined, acct2: PublicKey) => {
   }
   expect(acct1.toBase58()).equal(acct2.toBase58());
 };
-export const readAcct = (acct1: PublicKey, acctOwner: PublicKey) => {
+export const readAcct = (acct1: PublicKey, acctOwner?: PublicKey) => {
   const pdaRaw = svm.getAccount(acct1);
   expect(pdaRaw).to.not.be.null;
   const rawAccountData = pdaRaw?.data;
   console.log("rawAccountData:", rawAccountData);
   console.log("pdaRaw?.owner:", pdaRaw?.owner.toBase58());
-  acctEqual(pdaRaw?.owner, acctOwner);
+  if (acctOwner) acctEqual(pdaRaw?.owner, acctOwner);
   return rawAccountData;
 };
-//-------------== Program Methods
+export const ataBalc = (
+  ata: PublicKey,
+  name = "token balc",
+  isVerbose = true,
+) => {
+  const raw = svm.getAccount(ata);
+  if (!raw) {
+    if (isVerbose) console.log(name, ": ata is null");
+    return zero;
+  }
+  const rawAcctData = raw?.data;
+  const decoded = AccountLayout.decode(rawAcctData);
+  if (isVerbose) console.log(name, ":", decoded.amount);
+  return decoded.amount;
+};
+export const ataBalCk = (
+  ata: PublicKey,
+  expectedAmount: bigint,
+  name: string,
+  decimals = 6,
+) => {
+  const amount = ataBalc(ata, name, false);
+  console.log(name, "token:", amount, amount / BigInt(10 ** decimals));
+  expect(amount).eq(expectedAmount);
+};
+//-------------== iamRegistry Program Methods
 export const initializeProtocol = (
   signer: Keypair,
   protocol_config: PublicKey,
@@ -84,6 +110,7 @@ export const initializeProtocol = (
   verification_fee: bigint,
 ) => {
   const disc = [188, 233, 252, 106, 134, 146, 202, 91]; //copied from Anchor IDL
+  const progAddr = registryAddr;
   if (challenge_expiry < 0) {
     throw new Error("challenge_expiry should be positive");
   }
@@ -101,10 +128,112 @@ export const initializeProtocol = (
       { pubkey: protocol_config, isSigner: false, isWritable: true },
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
     ],
-    programId: registryAddr,
+    programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(svm, blockhash, [ix], [signer], registryAddr);
+  sendTxns(blockhash, [ix], [signer], progAddr);
+};
+//-------------== iamAnchor Program Methods
+export const mintAnchor = (
+  signer: Keypair,
+  commitment: Buffer<ArrayBuffer>,
+  identity_state: PublicKey,
+  mint: PublicKey,
+  mintAuthority: PublicKey,
+  tokenAccount: PublicKey,
+  associatedTokenProgram: PublicKey,
+  tokenProgram: PublicKey,
+  //systemProgram: PublicKey,
+  protocol_config: PublicKey,
+  treasury: PublicKey,
+) => {
+  const disc = [68, 56, 113, 102, 236, 152, 146, 60]; //copied from Anchor IDL
+  const progAddr = iamAnchorAddr;
+  const argData = [...commitment];
+  const blockhash = svm.latestBlockhash();
+  const ix = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: identity_state, isSigner: false, isWritable: true },
+      { pubkey: mint, isSigner: false, isWritable: true },
+      { pubkey: mintAuthority, isSigner: false, isWritable: false }, //non writable
+      { pubkey: tokenAccount, isSigner: false, isWritable: true },
+      { pubkey: associatedTokenProgram, isSigner: false, isWritable: false },
+      { pubkey: tokenProgram, isSigner: false, isWritable: false },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
+      { pubkey: treasury, isSigner: false, isWritable: true },
+    ],
+    programId: progAddr,
+    data: Buffer.from([...disc, ...argData]),
+  });
+  sendTxns(blockhash, [ix], [signer], progAddr);
+};
+
+export const updateAnchor = (
+  signer: Keypair,
+  new_commitment: Buffer<ArrayBuffer>,
+  identity_state: PublicKey,
+  protocol_config: PublicKey,
+  treasury: PublicKey,
+  //systemProgram: PublicKey,
+) => {
+  const disc = [120, 192, 72, 245, 112, 246, 119, 135]; //copied from Anchor IDL
+  const progAddr = iamAnchorAddr;
+  const argData = [...new_commitment];
+  const blockhash = svm.latestBlockhash();
+  const ix = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: identity_state, isSigner: false, isWritable: true },
+      { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
+      { pubkey: treasury, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    programId: progAddr,
+    data: Buffer.from([...disc, ...argData]),
+  });
+  sendTxns(blockhash, [ix], [signer], progAddr);
+};
+
+export const createChallenge = (
+  signer: Keypair, //challenger
+  nonce: number[],
+  challengePda: PublicKey,
+  //systemProgram: PublicKey,
+) => {
+  const disc = [170, 244, 47, 1, 1, 15, 173, 239]; //copied from Anchor IDL
+  const progAddr = verifierAddr;
+  const argData = [...nonce];
+  const blockhash = svm.latestBlockhash();
+  const ix = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: challengePda, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    programId: progAddr,
+    data: Buffer.from([...disc, ...argData]),
+  });
+  sendTxns(blockhash, [ix], [signer], progAddr);
+};
+
+//-------------== Time Manipulation
+export const getJsTime = () => {
+  const time = Math.floor(Date.now() / 1000);
+  console.log("JS time:", time);
+  return time;
+};
+export const setTime = (time: bigint) => {
+  const clock = svm.getClock();
+  clock.unixTimestamp = time;
+  svm.setClock(clock);
+};
+export const day = 86400; // seconds
+export const warpTime = (seconds: number) => {
+  const clock = svm.getClock();
+  clock.unixTimestamp += BigInt(seconds);
+  svm.setClock(clock);
 };
 //-------------== Deployment
 export const deployProgram = (
@@ -131,7 +260,6 @@ console.log("program deployment is successful");
 
 //-------------== Send Transactions
 export const sendTxns = (
-  svm: LiteSVM,
   blockhash: string,
   ixs: TransactionInstruction[],
   signerKps: Keypair[],
