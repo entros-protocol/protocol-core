@@ -41,11 +41,13 @@ describe("e2e: full IAM verification flow", () => {
     registry.programId
   );
 
-  const initialCommitment = Buffer.alloc(32);
-  initialCommitment.write("e2e_initial_commitment!", "utf-8");
-
-  const newCommitment = Buffer.alloc(32);
-  newCommitment.write("e2e_updated_commitment!", "utf-8");
+  // Commitments must match the fixture proof's public_inputs so that
+  // update_anchor's cross-program binding check passes: the fixture proves
+  // Hamming(ft_new, ft_prev) ∈ [3, 30) where the commitments are the Poseidon
+  // hashes of those fingerprints. commitment_prev becomes the mint's initial
+  // commitment; commitment_new becomes the updated value.
+  const initialCommitment = Buffer.from(fixture.public_inputs[1]);
+  const newCommitment = Buffer.from(fixture.public_inputs[0]);
 
   it("completes the full Phase 1 flow", async () => {
     // Fund the e2e user
@@ -171,12 +173,15 @@ describe("e2e: full IAM verification flow", () => {
     const result = await verifier.account.verificationResult.fetch(verificationPda);
     expect(result.isValid).to.be.true;
 
-    // 6. Update anchor with new commitment (trust score auto-computed)
+    // 6. Update anchor with new commitment (trust score auto-computed).
+    // Now requires the VerificationResult PDA + nonce as binding evidence —
+    // without it, the instruction rejects. This is the post-2026-04-20 patch.
     await iamAnchor.methods
-      .updateAnchor(Array.from(newCommitment))
+      .updateAnchor(Array.from(newCommitment), nonce)
       .accountsStrict({
         authority: e2eUser.publicKey,
         identityState: identityPda,
+        verificationResult: verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
         systemProgram: anchor.web3.SystemProgram.programId,

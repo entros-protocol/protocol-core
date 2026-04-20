@@ -52,3 +52,98 @@ export const deriveVerificationPda = (
     [Buffer.from("verification"), verifier.toBuffer(), Buffer.from(nonce)],
     verifierProgId,
   );
+
+/**
+ * Bootstrap a fresh user through mint + create_challenge + verify_proof,
+ * leaving them ready to call update_anchor with the post-patch binding.
+ *
+ * The initial commitment is set to the fixture's commitment_prev so that
+ * the subsequent update_anchor (with new_commitment = fixture's commitment_new)
+ * passes the binding check. Caller airdrops SOL to `user` before invoking.
+ *
+ * Returns everything the caller needs to build the updateAnchor instruction.
+ */
+export interface BootstrappedUser {
+  user: web3.Keypair;
+  identityPda: PublicKey;
+  mintPda: PublicKey;
+  nonce: number[];
+  challengePda: PublicKey;
+  verificationPda: PublicKey;
+}
+
+export async function bootstrapVerifiedUser(params: {
+  user: web3.Keypair;
+  iamAnchor: any;
+  iamVerifier: any;
+  fixture: any;
+  protocolConfigPda: PublicKey;
+  treasuryPda: PublicKey;
+  mintAuthorityPda: PublicKey;
+}): Promise<BootstrappedUser> {
+  const { user, iamAnchor, iamVerifier, fixture, protocolConfigPda, treasuryPda, mintAuthorityPda } = params;
+  const { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } = await import("@solana/spl-token");
+
+  const [identityPda] = deriveIdentityPda(user.publicKey, iamAnchor.programId);
+  const [mintPda] = deriveMintPda(user.publicKey, iamAnchor.programId);
+  const ata = getAssociatedTokenAddressSync(mintPda, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
+
+  const initialCommitment = Buffer.from(fixture.public_inputs[1]);
+
+  await iamAnchor.methods
+    .mintAnchor(Array.from(initialCommitment))
+    .accountsStrict({
+      user: user.publicKey,
+      identityState: identityPda,
+      mint: mintPda,
+      mintAuthority: mintAuthorityPda,
+      tokenAccount: ata,
+      associatedTokenProgram: new web3.PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+      tokenProgram: TOKEN_2022_PROGRAM_ID,
+      systemProgram: web3.SystemProgram.programId,
+      protocolConfig: protocolConfigPda,
+      treasury: treasuryPda,
+    })
+    .signers([user])
+    .rpc();
+
+  const nonce = generateNonce();
+  const [challengePda] = deriveChallengePda(user.publicKey, nonce, iamVerifier.programId);
+  const [verificationPda] = deriveVerificationPda(user.publicKey, nonce, iamVerifier.programId);
+
+  await iamVerifier.methods
+    .createChallenge(nonce)
+    .accountsStrict({
+      challenger: user.publicKey,
+      challenge: challengePda,
+      systemProgram: web3.SystemProgram.programId,
+    })
+    .signers([user])
+    .rpc();
+
+  const proofBytes = Buffer.from(fixture.proof_bytes);
+  await iamVerifier.methods
+    .verifyProof(proofBytes, fixture.public_inputs, nonce)
+    .accountsStrict({
+      verifier: user.publicKey,
+      challenge: challengePda,
+      verificationResult: verificationPda,
+      systemProgram: web3.SystemProgram.programId,
+    })
+    .signers([user])
+    .rpc();
+
+  return { user, identityPda, mintPda, nonce, challengePda, verificationPda };
+}
+
+/**
+ * Airdrop and wait for confirmation.
+ */
+export async function airdrop(
+  connection: web3.Connection,
+  pubkey: PublicKey,
+  lamports: number,
+): Promise<void> {
+  const sig = await connection.requestAirdrop(pubkey, lamports);
+  await connection.confirmTransaction(sig, "confirmed");
+}
