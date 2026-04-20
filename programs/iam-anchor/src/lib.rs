@@ -30,6 +30,41 @@ const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     102, 163, 198, 189, 82, 37, 225, 38, 52, 233, 157, 117,
 ]);
 
+/// iam-verifier program ID for cross-program VerificationResult PDA validation.
+/// Decoded from: 4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV
+const VERIFIER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    48, 50, 94, 115, 90, 162, 108, 8, 240, 151, 76, 223, 101, 176, 170, 86, 254, 247, 252, 28,
+    240, 145, 60, 108, 42, 129, 105, 32, 232, 212, 226, 52,
+]);
+
+/// Maximum age of a VerificationResult consumed by update_anchor, in seconds.
+/// Bounds the verify-to-consume window separately from challenge_expiry
+/// (which bounds proof-generation-to-verification). 600s = 10 min accommodates
+/// relayer latency without allowing stale proofs to sit indefinitely.
+const MAX_PROOF_AGE_SECS: i64 = 600;
+
+/// Post-patch size of the iam-verifier `VerificationResult` account.
+/// Enforced as a length check in update_anchor — accounts created before the
+/// 2026-04-20 binding patch have the smaller legacy layout (114 bytes) and
+/// are rejected with `StaleVerificationResult`. Keep in sync with
+/// `iam_verifier::state::VerificationResult::LEN`.
+const VERIFICATION_RESULT_LEN_V2: usize = 182;
+
+/// Anchor discriminator for `VerificationResult` (first 8 bytes of
+/// `sha256("account:VerificationResult")`). Defense-in-depth check that the
+/// referenced account is actually an iam-verifier VerificationResult and not
+/// a same-length account owned by iam-verifier that happens to resolve at
+/// the PDA seeds.
+const VERIFICATION_RESULT_DISCRIMINATOR: [u8; 8] = [104, 111, 80, 172, 219, 191, 162, 38];
+
+/// Byte offsets into the packed VerificationResult account data (post-patch).
+/// After the 8-byte Anchor discriminator, fields are serialized in struct order.
+/// Keep synchronized with iam-verifier/src/state.rs.
+const VR_OFFSET_VERIFIER: usize = 8;
+const VR_OFFSET_VERIFIED_AT: usize = 72;
+const VR_OFFSET_COMMITMENT_NEW: usize = 114;
+const VR_OFFSET_COMMITMENT_PREV: usize = 146;
+
 /// Integer square root via Newton's method (deterministic, no floating point).
 /// Mirrors iam_registry::isqrt — keep implementations in sync.
 fn isqrt(n: u64) -> u64 {
@@ -179,15 +214,41 @@ pub mod iam_anchor {
     }
 
     /// Update the identity state after a successful proof verification.
+    ///
     /// Trust score is computed automatically from verification history and protocol config.
     /// Handles transparent migration from old (10-slot) to new (52-slot) account layouts.
-    pub fn update_anchor(ctx: Context<UpdateAnchor>, new_commitment: [u8; 32]) -> Result<()> {
+    ///
+    /// Requires a matching, fresh `VerificationResult` PDA (owned by iam-verifier)
+    /// whose `commitment_new` equals `new_commitment` and whose `commitment_prev`
+    /// equals the identity's current stored commitment. Without this binding the
+    /// instruction would accept any commitment with no biometric proof — allowing
+    /// trust-score farming via per-call fee payment, which contradicts the
+    /// protocol's economic deterrence model. See AUDIT.md for details.
+    ///
+    /// The `verification_nonce` argument supplies the challenge nonce used to
+    /// derive the VerificationResult PDA (`seeds = [b"verification", authority, nonce]`).
+    /// Single-use is enforced implicitly: after this call, `current_commitment`
+    /// rotates to `new_commitment`, so the consumed VerificationResult's
+    /// `commitment_prev` no longer matches on any future call.
+    #[allow(unused_variables)] // nonce is consumed via the #[instruction] seeds constraint
+    pub fn update_anchor(
+        ctx: Context<UpdateAnchor>,
+        new_commitment: [u8; 32],
+        verification_nonce: [u8; 32],
+    ) -> Result<()> {
         require!(
             new_commitment != [0u8; 32],
             IamAnchorError::InvalidCommitment
         );
 
         let identity_info = &ctx.accounts.identity_state;
+        // Defense-in-depth: the seeds constraint already forces the address,
+        // but an explicit owner check prevents any future refactor from
+        // accidentally accepting a program-external account at this PDA.
+        require!(
+            identity_info.owner == &crate::ID,
+            IamAnchorError::InvalidIdentityState
+        );
         let now = Clock::get()?.unix_timestamp;
         let new_len = IdentityState::LEN;
 
@@ -224,6 +285,76 @@ pub mod iam_anchor {
         require!(
             identity.owner == ctx.accounts.authority.key(),
             IamAnchorError::Unauthorized
+        );
+
+        // Cross-program validation of the VerificationResult PDA.
+        //
+        // The account is passed as UncheckedAccount because Anchor's
+        // `Account<T>` deserialization requires owner-program equality with the
+        // crate that defined `T`; iam-verifier's state type isn't in scope for
+        // iam-anchor and adding a CPI dependency just to deserialize is
+        // heavier than raw-bytes validation. This matches the existing
+        // cross-program read pattern used for ProtocolConfig below.
+        //
+        // The `seeds = [b"verification", authority, verification_nonce]` +
+        // `seeds::program = VERIFIER_PROGRAM_ID` constraint on the account
+        // context guarantees the PDA address is correct. Here we additionally
+        // enforce: (a) owner program, (b) account is post-patch layout,
+        // (c) verifier matches signing authority, (d) proof is fresh,
+        // (e) commitment_new matches submitted new_commitment,
+        // (f) commitment_prev matches identity's current_commitment.
+        let vr_info = ctx.accounts.verification_result.to_account_info();
+        require!(
+            vr_info.owner == &VERIFIER_PROGRAM_ID,
+            IamAnchorError::VerificationResultWrongOwner
+        );
+        let vr_data = vr_info.try_borrow_data()?;
+        require!(
+            vr_data.len() >= VERIFICATION_RESULT_LEN_V2,
+            IamAnchorError::StaleVerificationResult
+        );
+        // Discriminator check: the first 8 bytes must match iam-verifier's
+        // Anchor-computed `sha256("account:VerificationResult")[0..8]`.
+        // Prevents a same-length but differently-typed account (e.g. some
+        // future Challenge v2 or an orphaned account) from masquerading.
+        require!(
+            vr_data[0..8] == VERIFICATION_RESULT_DISCRIMINATOR,
+            IamAnchorError::StaleVerificationResult
+        );
+        let verifier_pk_bytes: [u8; 32] = vr_data
+            [VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
+            .try_into()
+            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+        let verifier_pk = Pubkey::new_from_array(verifier_pk_bytes);
+        require!(
+            verifier_pk == ctx.accounts.authority.key(),
+            IamAnchorError::VerifierMismatch
+        );
+        let verified_at_bytes: [u8; 8] = vr_data
+            [VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
+            .try_into()
+            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+        let verified_at = i64::from_le_bytes(verified_at_bytes);
+        require!(
+            now.saturating_sub(verified_at) <= MAX_PROOF_AGE_SECS,
+            IamAnchorError::ProofExpired
+        );
+        let commitment_new_bound: [u8; 32] = vr_data
+            [VR_OFFSET_COMMITMENT_NEW..VR_OFFSET_COMMITMENT_NEW + 32]
+            .try_into()
+            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+        let commitment_prev_bound: [u8; 32] = vr_data
+            [VR_OFFSET_COMMITMENT_PREV..VR_OFFSET_COMMITMENT_PREV + 32]
+            .try_into()
+            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+        drop(vr_data);
+        require!(
+            commitment_new_bound == new_commitment,
+            IamAnchorError::CommitmentMismatch
+        );
+        require!(
+            commitment_prev_bound == identity.current_commitment,
+            IamAnchorError::PrevCommitmentMismatch
         );
 
         identity.current_commitment = new_commitment;
@@ -403,6 +534,7 @@ pub struct MintAnchor<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(new_commitment: [u8; 32], verification_nonce: [u8; 32])]
 pub struct UpdateAnchor<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -416,6 +548,18 @@ pub struct UpdateAnchor<'info> {
         bump,
     )]
     pub identity_state: UncheckedAccount<'info>,
+
+    /// CHECK: Cross-program read of iam-verifier VerificationResult PDA.
+    /// PDA seeds validated by Anchor; layout + owner + cross-field constraints
+    /// validated in instruction body. Binds the ZK proof to this specific
+    /// update — without this account, update_anchor would accept any commitment
+    /// with no proof.
+    #[account(
+        seeds = [b"verification", authority.key().as_ref(), verification_nonce.as_ref()],
+        bump,
+        seeds::program = VERIFIER_PROGRAM_ID,
+    )]
+    pub verification_result: UncheckedAccount<'info>,
 
     /// CHECK: Cross-program read of iam-registry ProtocolConfig PDA.
     /// Validated by seeds + owner via seeds::program.
