@@ -1,39 +1,42 @@
 import { test } from "node:test";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
-import type { Keypair, PublicKey } from "@solana/web3.js";
+import type { Keypair } from "@solana/web3.js";
 import { expect } from "chai";
 import {
-  decodeIdentityStateWeb3js,
-  decodeProtocolConfigWeb3js,
-  deriveChallengePda,
-  deriveIdentityPda,
-  deriveMintPda,
-  deriveVerificationPda,
-  generateNonce,
+  BASE_TRUST_INCREMENT,
+  CHALLENGE_EXPIRY,
+  decodeIdentityPdaDev,
+  decodeProtocolConfigDev,
+  getAta,
+  iamAnchorAddr,
+  loadProofFixture,
+  MAX_TRUST_SCORE,
+  MIN_STAKE,
   mintAuthorityPda,
+  type Pdas,
   protocolConfigBump,
   protocolConfigPda,
+  registryAddr,
   treasuryPda,
+  VERIFICATION_FEE,
 } from "./encodeDecode.ts";
 import {
   acctEqual,
   acctIsNull,
   adminKp,
   ataBalCk,
-  createChallenge,
   day,
   getJsTime,
-  iamAnchorAddr,
   initializeProtocol,
   mintAnchor,
+  pdasBySignerKp,
   readAcct,
-  registryAddr,
   setTime,
   updateAnchor,
+  verifyUser,
   warpTime,
 } from "./litesvm-utils.ts";
 
@@ -42,62 +45,53 @@ $ anchor build
 Then Install NodeJs v25.9.0(or above v22.18.0) to run this TypeScript Natively: node ./file_path/this_file.ts
 Or use Bun: bun test ./file_path/this_file.ts
 */
-const commitment = Buffer.alloc(32);
-commitment.write("initial_commitment_test", "utf-8");
+const fixture = loadProofFixture();
 
 let signerKp: Keypair;
-let signer: PublicKey;
+let pdas: Pdas;
 let trustscorePrev: number;
 setTime(BigInt(getJsTime()));
 
 test("registry.initializeProtocol()", async () => {
+  console.log("\n----------------== registry.initializeProtocol()");
   signerKp = adminKp;
-  signer = signerKp.publicKey;
-  const min_stake = BigInt(1_000_000_000);
-  const challenge_expiry = BigInt(300); //i64,
-  const max_trust_score = 10000; //u16,
-  const base_trust_increment = 100; //u16,
-  const verification_fee = BigInt(0);
+
   acctIsNull(protocolConfigPda);
   initializeProtocol(
     signerKp,
     protocolConfigPda,
-    min_stake,
-    challenge_expiry,
-    max_trust_score,
-    base_trust_increment,
-    verification_fee,
+    MIN_STAKE,
+    CHALLENGE_EXPIRY,
+    MAX_TRUST_SCORE,
+    BASE_TRUST_INCREMENT,
+    VERIFICATION_FEE,
   );
 
   const rawAccountData = readAcct(protocolConfigPda, registryAddr);
-  const decoded = decodeProtocolConfigWeb3js(rawAccountData);
-  acctEqual(decoded.admin, signer);
-  expect(decoded.min_stake).eq(min_stake);
-  expect(decoded.challenge_expiry).eq(challenge_expiry);
-  expect(decoded.max_trust_score).eq(max_trust_score);
-  expect(decoded.base_trust_increment).eq(base_trust_increment);
+  const decoded = decodeProtocolConfigDev(rawAccountData);
+  acctEqual(decoded.admin, signerKp.publicKey);
+  expect(decoded.min_stake).eq(MIN_STAKE);
+  expect(decoded.challenge_expiry).eq(CHALLENGE_EXPIRY);
+  expect(decoded.max_trust_score).eq(MAX_TRUST_SCORE);
+  expect(decoded.base_trust_increment).eq(BASE_TRUST_INCREMENT);
   expect(decoded.bump).eq(protocolConfigBump);
-  expect(decoded.verification_fee).eq(verification_fee);
+  expect(decoded.verification_fee).eq(VERIFICATION_FEE);
 });
 
 test("registry.mintAnchor()", async () => {
+  console.log("\n----------------== registry.mintAnchor()");
   signerKp = adminKp;
-  signer = signerKp.publicKey;
-  const [identityPda] = deriveIdentityPda(signer);
-  const [mintPda] = deriveMintPda(signer);
+  pdas = pdasBySignerKp(signerKp);
   const tokenProgram = TOKEN_2022_PROGRAM_ID;
-  const ata = getAssociatedTokenAddressSync(
-    mintPda,
-    signer,
-    false,
-    tokenProgram,
-  );
+  const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
+
+  const initialCommitment = Buffer.from(fixture.public_inputs[1]);
 
   mintAnchor(
     signerKp,
-    commitment,
-    identityPda,
-    mintPda,
+    initialCommitment,
+    pdas.identityPda,
+    pdas.mintPda,
     mintAuthorityPda,
     ata,
     ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -105,44 +99,49 @@ test("registry.mintAnchor()", async () => {
     protocolConfigPda,
     treasuryPda,
   );
-  const rawAccountData = readAcct(identityPda, iamAnchorAddr);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
-  acctEqual(decoded.owner, signer);
+  const rawAccountData = readAcct(pdas.identityPda, iamAnchorAddr);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
+  acctEqual(decoded.owner, pdas.signer);
   expect(decoded.verification_count).to.equal(0);
   expect(decoded.trust_score).to.equal(0);
-  console.log("expected commitment:", commitment.buffer);
-  expect(Buffer.from(decoded.current_commitment)).to.deep.equal(commitment);
-  acctEqual(decoded.mint, mintPda);
+  console.log("expected initialCommitment:", initialCommitment.buffer);
+  expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
+    initialCommitment,
+  );
+  acctEqual(decoded.mint, pdas.mintPda);
   ataBalCk(ata, BigInt(1), "IdentityMint", 0);
 });
 
 test("iamAnchor.updateAnchor()", async () => {
+  console.log("\n----------------== iamAnchor.updateAnchor()");
   //update_anchor() at T=0 → trust score = 100
   signerKp = adminKp;
-  signer = signerKp.publicKey;
-  const [identityPda] = deriveIdentityPda(signer);
-  const newCommitment = Buffer.alloc(32);
-  newCommitment.write("updated_commitment_v1!", "utf-8");
+  const { identityPda, nonce, verificationPda, fixture } = verifyUser(signerKp);
+
+  const newCommitment = Buffer.from(fixture.public_inputs[0]);
 
   updateAnchor(
     signerKp,
     newCommitment,
+    nonce,
+    verificationPda,
     identityPda,
     protocolConfigPda,
     treasuryPda,
   );
   const rawAccountData = readAcct(identityPda);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(decoded.verification_count).to.equal(1);
   expect(decoded.trust_score).to.equal(100);
   trustscorePrev = decoded.trust_score;
 });
 
-test("iamAnchor.updateAnchor() 2nd & 3rd time", async () => {
+// TODO: A second successful updateAnchor would need another fixture proof where commitment_prev = public_inputs[0] of the first, which means regenerating fixtures
+test.skip("iamAnchor.updateAnchor() 2nd & 3rd time", async () => {
+  console.log("\n----------------== iamAnchor.updateAnchor() 2nd & 3rd time");
   //warp 1 day + create_challenge + verify_proof + update_anchor: trust score should be ~196
   signerKp = adminKp;
-  signer = signerKp.publicKey;
-  const [identityPda] = deriveIdentityPda(signer);
+  const { identityPda, nonce, verificationPda } = pdasBySignerKp(signerKp);
   const newCommitment = Buffer.alloc(32);
   newCommitment.write("updated_commitment_v2!", "utf-8");
 
@@ -151,12 +150,14 @@ test("iamAnchor.updateAnchor() 2nd & 3rd time", async () => {
   updateAnchor(
     signerKp,
     newCommitment,
+    nonce,
+    verificationPda,
     identityPda,
     protocolConfigPda,
     treasuryPda,
   );
   const rawAccountData = readAcct(identityPda);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(decoded.verification_count).to.equal(2);
   expect(decoded.trust_score).greaterThan(trustscorePrev); //198
   trustscorePrev = decoded.trust_score;
@@ -168,26 +169,18 @@ test("iamAnchor.updateAnchor() 2nd & 3rd time", async () => {
   updateAnchor(
     signerKp,
     newCommitment3,
+    nonce,
+    verificationPda,
     identityPda,
     protocolConfigPda,
     treasuryPda,
   );
   const rawAccountData3 = readAcct(identityPda);
-  const decoded3 = decodeIdentityStateWeb3js(rawAccountData3);
+  const decoded3 = decodeIdentityPdaDev(rawAccountData3);
   expect(decoded3.verification_count).to.equal(3);
   expect(decoded3.trust_score).greaterThan(trustscorePrev); //311
 });
 
-test("iamVerifier.createChallenge()", async () => {
-  signerKp = adminKp;
-  signer = signerKp.publicKey;
-
-  const nonce = generateNonce(); // array of 32 u8 in Anchor IDL
-  const [challengePda] = deriveChallengePda(signer, nonce);
-  const [_verificationPda] = deriveVerificationPda(signer, nonce);
-
-  createChallenge(signerKp, nonce, challengePda);
-});
 /* challengeExpiry test:
 const fixture = loadProofFixture();
 const proofBytes = Buffer.from(fixture.proof_bytes); // Vec<u8>

@@ -1,4 +1,4 @@
-import { AccountLayout } from "@solana/spl-token";
+import { AccountLayout, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   Keypair,
   LAMPORTS_PER_SOL,
@@ -15,7 +15,14 @@ import {
   type SimulatedTransactionInfo,
   TransactionMetadata,
 } from "litesvm";
-import { numToBytes } from "./encodeDecode.ts";
+import {
+  getPdas,
+  iamAnchorAddr,
+  loadProofFixture,
+  numToBytes,
+  registryAddr,
+  verifierAddr,
+} from "./encodeDecode.ts";
 
 export let svm = new LiteSVM();
 export const zero = BigInt(0);
@@ -34,23 +41,49 @@ svm.airdrop(owner, initSolBalc);
 svm.airdrop(admin, initSolBalc);
 svm.airdrop(user1, initSolBalc);
 
-export const iamAnchorAddr = new PublicKey(
-  "GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2",
-);
-console.log("iamAnchorAddr:", iamAnchorAddr.toBase58());
-
-export const registryAddr = new PublicKey(
-  "6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW",
-);
-console.log("registryAddr:", registryAddr.toBase58());
-
-export const verifierAddr = new PublicKey(
-  "4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV",
-);
-console.log("verifierAddr:", verifierAddr.toBase58());
-
 export const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111"); //default or anchor.web3.SystemProgram.programId
+export const pdasAdmin = getPdas(admin);
+export const pdasUser1 = getPdas(user1);
+export const pdasBySignerKp = (signerKp: Keypair) => {
+  switch (signerKp.publicKey.toBase58()) {
+    case admin.toBase58():
+      return pdasAdmin;
+    case user1.toBase58():
+      return pdasUser1;
+    default: {
+      throw new Error("invalid signer");
+    }
+  }
+};
 
+export const verifyUser = (signerKp: Keypair) => {
+  const { signer, identityPda, mintPda, nonce, challengePda, verificationPda } =
+    pdasBySignerKp(signerKp);
+
+  createChallenge(signerKp, nonce, challengePda);
+
+  const fixture = loadProofFixture();
+
+  const proofBytes: Buffer<ArrayBuffer> = Buffer.from(fixture.proof_bytes); // for Rust Vec<u8>
+  const publicInputs: number[][] = fixture.public_inputs; // for Rust Vec<[u8; 32]>
+  verifyProof(
+    signerKp,
+    proofBytes,
+    publicInputs,
+    nonce,
+    challengePda,
+    verificationPda,
+  );
+  return {
+    signer,
+    identityPda,
+    mintPda,
+    nonce,
+    challengePda,
+    verificationPda,
+    fixture,
+  };
+};
 //-------------==
 export const acctIsNull = (account: PublicKey) => {
   const raw = svm.getAccount(account);
@@ -193,7 +226,7 @@ export const mintAnchor = (
   mint: PublicKey,
   mintAuthority: PublicKey,
   tokenAccount: PublicKey,
-  associatedTokenProgram: PublicKey,
+  associatedTokenProgram = ASSOCIATED_TOKEN_PROGRAM_ID,
   tokenProgram: PublicKey,
   protocol_config: PublicKey,
   treasury: PublicKey,
@@ -225,6 +258,8 @@ export const mintAnchor = (
 export const updateAnchor = (
   signer: Keypair,
   new_commitment: Buffer<ArrayBuffer>,
+  verification_nonce: number[],
+  verification_result: PublicKey,
   identity_state: PublicKey,
   protocol_config: PublicKey,
   treasury: PublicKey,
@@ -232,12 +267,15 @@ export const updateAnchor = (
 ) => {
   const disc = [120, 192, 72, 245, 112, 246, 119, 135]; //copied from Anchor IDL
   const progAddr = iamAnchorAddr;
-  const argData = [...new_commitment];
+  const new_commitment_array = Array.from(new_commitment);
+  console.log("new_commitment_array:", new_commitment_array);
+  const argData = [...new_commitment_array, ...verification_nonce];
   const blockhash = svm.latestBlockhash();
   const ix = new TransactionInstruction({
     keys: [
       { pubkey: signer.publicKey, isSigner: true, isWritable: true },
       { pubkey: identity_state, isSigner: false, isWritable: true },
+      { pubkey: verification_result, isSigner: false, isWritable: true },
       { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
       { pubkey: treasury, isSigner: false, isWritable: true },
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
@@ -461,8 +499,9 @@ export const checkLogs = (
     console.log("sendRes.toString():", errStr);
     const pos = errStr.search("custom program error: 0x");
     console.log("pos:", pos);
+    let errCode = "";
     if (pos > -1) {
-      let errCode = errStr.substring(pos + 22, pos + 26);
+      errCode = errStr.substring(pos + 22, pos + 28);
       if (errCode.slice(-1) === '"') {
         //console.log("last char:", errCode.slice(-1));
         errCode = errCode.slice(0, -1);
@@ -477,7 +516,18 @@ export const checkLogs = (
       console.log("found error?:", foundErrorMesg);
       expect(foundErrorMesg).eq(true);
     } else {
-      throw new Error("This error is unexpected");
+      const pos1 = errStr.search("Program log");
+      console.log("pos1:", pos1);
+      const pos2 = errStr.search("consumed");
+      console.log("pos2:", pos2);
+      let err_mesg = "";
+      if (pos1 > -1 && pos2 > -1) {
+        err_mesg = errStr.substring(pos1, pos2);
+        //console.log("err_mesg:", err_mesg);
+      }
+      throw new Error(
+        `Unexpected error: ${err_mesg}  errCode: ${errCode}, ${Number(errCode)}`,
+      );
     }
   }
 };
