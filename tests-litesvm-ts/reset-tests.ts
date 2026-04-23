@@ -7,9 +7,10 @@ import {
 import type { Keypair, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
 import {
-  decodeIdentityStateWeb3js,
+  decodeIdentityPdaDev,
   deriveIdentityPda,
   deriveMintPda,
+  iamAnchorAddr,
   mintAuthorityPda,
   protocolConfigPda,
   treasuryPda,
@@ -20,7 +21,6 @@ import {
   ataBalCk,
   expireBlockhash,
   getJsTime,
-  iamAnchorAddr,
   initializeProtocol,
   mintAnchor,
   readAcct,
@@ -98,7 +98,7 @@ test("iamAnchor.mintAnchor() to establish baseline", async () => {
   );
 
   const rawAccountData = readAcct(identityPda, iamAnchorAddr);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
   acctEqual(decoded.owner, signer);
   expect(decoded.verification_count).to.equal(0);
   expect(decoded.trust_score).to.equal(0);
@@ -125,7 +125,7 @@ test("iamAnchor.resetIdentityState() happy path on fresh mint", async () => {
   );
 
   const rawAccountData = readAcct(identityPda, iamAnchorAddr);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
 
   // Commitment rotated
   expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
@@ -161,7 +161,7 @@ test("iamAnchor.resetIdentityState() fails while cooldown active", async () => {
 
   // Verify state did not mutate — commitment is still the first-reset value.
   const rawAccountData = readAcct(identityPda, iamAnchorAddr);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
     resetCommitment,
   );
@@ -185,7 +185,7 @@ test("iamAnchor.resetIdentityState() succeeds after cooldown elapses", async () 
   );
 
   const rawAccountData = readAcct(identityPda, iamAnchorAddr);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
     resetCommitment2,
   );
@@ -213,7 +213,7 @@ test("iamAnchor.resetIdentityState() rejects zero commitment", async () => {
 
   // State still matches the prior successful reset.
   const rawAccountData = readAcct(identityPda, iamAnchorAddr);
-  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
     resetCommitment2,
   );

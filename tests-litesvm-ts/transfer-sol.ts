@@ -8,9 +8,10 @@ import {
 } from "@solana/web3.js";
 import { expect } from "chai";
 import {
-  decodeProtocolConfigWeb3js,
+  decodeProtocolConfigDev,
   protocolConfigBump,
   protocolConfigPda,
+  registryAddr,
 } from "./encodeDecode.ts";
 import {
   acctEqual,
@@ -18,7 +19,6 @@ import {
   adminKp,
   initializeProtocol,
   readAcct,
-  registryAddr,
   svm,
 } from "./litesvm-utils.ts";
 
@@ -77,7 +77,7 @@ test("registry.initializeProtocol()", async () => {
   );
 
   const rawAccountData = readAcct(protocolConfigPda, registryAddr);
-  const decoded = decodeProtocolConfigWeb3js(rawAccountData);
+  const decoded = decodeProtocolConfigDev(rawAccountData);
   acctEqual(decoded.admin, signer);
   expect(decoded.min_stake).eq(min_stake);
   expect(decoded.challenge_expiry).eq(challenge_expiry);
