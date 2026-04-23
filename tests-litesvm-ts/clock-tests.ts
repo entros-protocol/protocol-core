@@ -11,6 +11,7 @@ import {
   decodeIdentityPdaDev,
   decodeProtocolConfigDev,
   getAta,
+  type IdentityStateAcctWeb3js,
   iamAnchorAddr,
   loadProofFixture,
   MAX_TRUST_SCORE,
@@ -28,14 +29,21 @@ import {
   acctIsNull,
   adminKp,
   ataBalCk,
+  authorizeNewWallet,
   day,
+  defaultRecentTimestamps,
+  expectTheSameArray,
   getJsTime,
+  getSolTime,
   initializeProtocol,
+  migrateIdentity,
   mintAnchor,
   pdasBySignerKp,
   readAcct,
   setTime,
   updateAnchor,
+  user1,
+  user1Kp,
   verifyUser,
   warpTime,
 } from "./litesvm-utils.ts";
@@ -48,8 +56,13 @@ Or use Bun: bun test ./file_path/this_file.ts
 const fixture = loadProofFixture();
 
 let signerKp: Keypair;
+let signer2Kp: Keypair;
 let pdas: Pdas;
+let t1: bigint;
 let trustscorePrev: number;
+let rawAccData: Uint8Array<ArrayBufferLike> | undefined;
+let identity: IdentityStateAcctWeb3js;
+let identityOld: IdentityStateAcctWeb3js;
 setTime(getJsTime());
 
 test("registry.initializeProtocol()", async () => {
@@ -136,6 +149,102 @@ test("iamAnchor.updateAnchor()", async () => {
   trustscorePrev = decoded.trust_score;
 });
 
+test("iamAnchor.authorizeNewWallet()", async () => {
+  console.log("\n----------------== iamAnchor.authorizeNewWallet()");
+  signerKp = adminKp;
+  signer2Kp = user1Kp;
+  pdas = pdasBySignerKp(signerKp); //{signer, identityPda, mintPda, nonce, challengePda, verificationPda }
+
+  warpTime(13 * day + 7);
+  authorizeNewWallet(adminKp, pdas.identityPda, signer2Kp);
+  rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
+  identity = decodeIdentityPdaDev(rawAccData);
+  acctEqual(identity.owner, signerKp.publicKey);
+  console.log("user1:", user1.toBase58());
+  acctEqual(identity.new_wallet, signer2Kp.publicKey);
+});
+
+test("iamAnchor.mintAnchor() by user1", async () => {
+  console.log("\n----------------== iamAnchor.mintAnchor() by user1");
+  signerKp = user1Kp;
+  pdas = pdasBySignerKp(signerKp);
+  const tokenProgram = TOKEN_2022_PROGRAM_ID;
+  const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
+  const initialCommitment = Buffer.from(fixture.public_inputs[1]);
+
+  warpTime(33 * day + 3);
+  t1 = getSolTime();
+  mintAnchor(
+    signerKp,
+    initialCommitment,
+    pdas.identityPda,
+    pdas.mintPda,
+    mintAuthorityPda,
+    ata,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+    tokenProgram,
+    protocolConfigPda,
+    treasuryPda,
+  );
+  rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
+  identity = decodeIdentityPdaDev(rawAccData);
+  acctEqual(identity.owner, signerKp.publicKey);
+  expect(identity.verification_count).to.equal(0);
+  expect(identity.trust_score).to.equal(0);
+  console.log("expected initialCommitment:", initialCommitment.buffer);
+  expect(Buffer.from(identity.current_commitment)).to.deep.equal(
+    initialCommitment,
+  );
+  acctEqual(identity.mint, pdas.mintPda);
+  ataBalCk(ata, BigInt(1), "IdentityMint", 0);
+
+  expect(identity.creation_timestamp).to.equal(t1);
+  expect(identity.last_verification_timestamp).to.equal(t1);
+  expectTheSameArray(identity.recent_timestamps, defaultRecentTimestamps);
+});
+
+test("iamAnchor.migrateIdentity() by user1", async () => {
+  console.log("\n----------------== iamAnchor.migrateIdentity() by user1");
+  signerKp = user1Kp;
+  pdas = pdasBySignerKp(signerKp);
+  const pdasAdmin = pdasBySignerKp(adminKp);
+
+  migrateIdentity(
+    signerKp,
+    pdasAdmin.signer,
+    pdasAdmin.identityPda,
+    pdas.identityPda,
+  );
+  rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
+  identity = decodeIdentityPdaDev(rawAccData);
+  acctEqual(identity.owner, signerKp.publicKey);
+
+  rawAccData = readAcct(pdasAdmin.identityPda, iamAnchorAddr);
+  identityOld = decodeIdentityPdaDev(rawAccData);
+
+  expect(identity.last_verification_timestamp).to.equal(
+    identityOld.last_verification_timestamp,
+  );
+  expect(identity.verification_count).to.equal(identityOld.verification_count);
+
+  expect(identity.trust_score).to.equal(identityOld.trust_score);
+
+  expect(Buffer.from(identity.current_commitment)).to.deep.equal(
+    identityOld.current_commitment,
+  );
+  expectTheSameArray(identity.recent_timestamps, identityOld.recent_timestamps);
+  acctEqual(identity.mint, pdas.mintPda);
+
+  console.log(
+    "identity new recent_timestamps:",
+    identity.recent_timestamps,
+    ", trust_score:",
+    identity.trust_score,
+    ", verification_count:",
+    identity.verification_count,
+  );
+});
+
 // TODO: A second successful updateAnchor would need another fixture proof where commitment_prev = public_inputs[0] of the first, which means regenerating fixtures
 test.skip("iamAnchor.updateAnchor() 2nd & 3rd time", async () => {
   console.log("\n----------------== iamAnchor.updateAnchor() 2nd & 3rd time");
@@ -180,9 +289,3 @@ test.skip("iamAnchor.updateAnchor() 2nd & 3rd time", async () => {
   expect(decoded3.verification_count).to.equal(3);
   expect(decoded3.trust_score).greaterThan(trustscorePrev); //311
 });
-
-/* challengeExpiry test:
-const fixture = loadProofFixture();
-const proofBytes = Buffer.from(fixture.proof_bytes); // Vec<u8>
-const publicInputs: number[][] = fixture.public_inputs; // Vec<[u8; 32]>
-*/
