@@ -4,7 +4,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_2022;
-use anchor_spl::token_interface::TokenInterface;
+use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 use solana_security_txt::security_txt;
 
 mod errors;
@@ -94,9 +94,11 @@ const MINT_SIZE_WITH_NON_TRANSFERABLE: usize = 170;
 
 #[program]
 pub mod iam_anchor {
+    use std::convert::identity;
+
     use super::*;
 
-    /// Mint a new IAM Anchor identity for the caller.
+    /// Mint a new IAM Anchor identity for the caller. rgb(107, 223, 7)
     /// Creates a NonTransferable Token-2022 mint, mints 1 token to the user's ATA,
     /// and initializes the IdentityState PDA.
     pub fn mint_anchor(ctx: Context<MintAnchor>, initial_commitment: [u8; 32]) -> Result<()> {
@@ -219,33 +221,131 @@ pub mod iam_anchor {
         Ok(())
     }
 
-    /// Authorize a new wallet by 2 signers
+    /// Authorize a new wallet by 2 signers. This can be done many times before invoking migrate_identity()
     pub fn authorize_new_wallet(ctx: Context<AuthorizeNewWallet>) -> Result<()> {
         let identity = &mut ctx.accounts.identity_state;
         identity.new_wallet = ctx.accounts.signer_new.key();
         Ok(())
     }
-    /// Migrade from an user's old IAM Anchor IdentityState PDA to a new one
+    /// Migrade from an user's old IAM Anchor IdentityState PDA to a new one rgb(107, 223, 7)
     pub fn migrate_identity(ctx: Context<MigradeIdentity>) -> Result<()> {
-        let signer = ctx.accounts.user.key();
-        let identity = &mut ctx.accounts.identity_state_new;
+        let user_key = ctx.accounts.user.key();
+        let mint_seeds: &[&[u8]] = &[b"mint", user_key.as_ref(), &[ctx.bumps.mint]];
+        let mint_authority_seeds: &[&[u8]] = &[b"mint_authority", &[ctx.bumps.mint_authority]];
+
+        // 1. Allocate mint account with space for NonTransferable extension
+        let rent = Rent::get()?;
+        let lamports = rent.minimum_balance(MINT_SIZE_WITH_NON_TRANSFERABLE);
+
+        system_program::create_account(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::CreateAccount {
+                    from: ctx.accounts.user.to_account_info(),
+                    to: ctx.accounts.mint.to_account_info(),
+                },
+                &[mint_seeds],
+            ),
+            lamports,
+            MINT_SIZE_WITH_NON_TRANSFERABLE as u64,
+            ctx.accounts.token_program.key,
+        )?;
+
+        // 2. Initialize NonTransferable extension (MUST be before InitializeMint2)
+        let ix = spl_token_2022::instruction::initialize_non_transferable_mint(
+            ctx.accounts.token_program.key,
+            &ctx.accounts.mint.key(),
+        )?;
+        anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
+
+        // 3. Initialize the mint (decimals=0, authority=mint_authority PDA)
+        let ix = spl_token_2022::instruction::initialize_mint2(
+            ctx.accounts.token_program.key,
+            &ctx.accounts.mint.key(),
+            &ctx.accounts.mint_authority.key(),
+            None, // no freeze authority
+            0,    // decimals
+        )?;
+        anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
+
+        // 4. Create the user's Associated Token Account
+        anchor_spl::associated_token::create(CpiContext::new(
+            ctx.accounts.associated_token_program.to_account_info(),
+            anchor_spl::associated_token::Create {
+                payer: ctx.accounts.user.to_account_info(),
+                associated_token: ctx.accounts.token_account.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+                token_program: ctx.accounts.token_program.to_account_info(),
+            },
+        ))?;
+
+        // 5. Mint exactly 1 token to the user's ATA
+        token_2022::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                token_2022::MintTo {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.token_account.to_account_info(),
+                    authority: ctx.accounts.mint_authority.to_account_info(),
+                },
+                &[mint_authority_seeds],
+            ),
+            1,
+        )?;
+        
+        // 6. Migrate Identity
+        let identity = &mut ctx.accounts.identity_state;
         let identity_old = &ctx.accounts.identity_state_old;
         require!(
-              identity_old.new_wallet == signer,
-              IamAnchorError::UnauthorizedNewWallet
-          );
+            identity_old.new_wallet == user_key,
+            IamAnchorError::UnauthorizedNewWallet
+        );
+
+        identity.owner = ctx.accounts.user.key();
+        identity.mint = ctx.accounts.mint.key();
+        identity.bump = ctx.bumps.identity_state;
+        //migrate below from the old identity
+        identity.creation_timestamp = identity_old.creation_timestamp;
         identity.last_verification_timestamp = identity_old.last_verification_timestamp;
         identity.verification_count = identity_old.verification_count;
         identity.trust_score = identity_old.trust_score;
         identity.current_commitment = identity_old.current_commitment;
         identity.recent_timestamps = identity_old.recent_timestamps;
-        //owner, creation_timestamp, mint, bump remain intact
+        identity.last_reset_timestamp = identity_old.last_reset_timestamp;
+
+        // Read verification fee from protocol config (cross-program, iam-registry)
+        let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
+        let verification_fee = if config_data.len() >= 69 {
+            u64::from_le_bytes([
+                config_data[61], config_data[62], config_data[63], config_data[64],
+                config_data[65], config_data[66], config_data[67], config_data[68],
+            ])
+        } else {
+            0
+        };
+        drop(config_data);
+
+        // Transfer verification fee from user to protocol treasury
+        if verification_fee > 0 {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.user.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                    },
+                ),
+                verification_fee,
+            )?;
+        }
 
         emit!(MigrateIdentity {
-            wallet_old: ctx.accounts.wallet_old.key(),
-            wallet_new: signer,
+            user_old: ctx.accounts.user_old.key(),
+            wallet_new: user_key,
             identity_old: ctx.accounts.identity_state_old.key(),
-            identity_new: ctx.accounts.identity_state_new.key(),
+            identity_new: ctx.accounts.identity_state.key(),
         });
           Ok(())
       }
@@ -674,22 +774,75 @@ pub struct AuthorizeNewWallet<'info> {
 pub struct MigradeIdentity<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
-    /// CHECK: cannot check this wallet
-    pub wallet_old: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        seeds = [b"identity", wallet_old.key().as_ref()],
-        bump, close = user
-    )]
-    pub identity_state_old: Account<'info, IdentityState>,
 
     #[account(
-        mut,
+        init,
+        payer = user,
+        space = IdentityState::LEN,
         seeds = [b"identity", user.key().as_ref()],
         bump,
     )]
-    pub identity_state_new: Account<'info, IdentityState>,
-}
+    pub identity_state: Box<Account<'info, IdentityState>>,
+    /// CHECK: TODO
+    #[account(
+        mut,
+        seeds = [b"mint", user.key().as_ref()],
+        bump,
+    )]
+    pub mint: UncheckedAccount<'info>,
+
+    /// CHECK: PDA used as mint authority. No data
+    #[account(
+        seeds = [b"mint_authority"],
+        bump,
+    )]
+    pub mint_authority: UncheckedAccount<'info>,
+    /// CHECK: TODO
+    #[account(mut)]
+    pub token_account: UncheckedAccount<'info>,
+
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+    /// CHECK: ProtocolConfig PDA from Registry
+    #[account(
+        seeds = [b"protocol_config"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+    /// CHECK: ProtocolTreasure PDA from Registry
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub treasury: UncheckedAccount<'info>,
+
+    // below is for migration
+    /// CHECK: cannot check this wallet
+    pub user_old: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [b"identity", user_old.key().as_ref()],
+        bump, close = user
+    )]
+    pub identity_state_old: Box<Account<'info, IdentityState>>,
+
+    /*#[account(
+        mut,
+        seeds = [b"mint", user_old.key().as_ref()],
+        bump,
+    )]
+    pub mint_old: InterfaceAccount<'info, Mint>,
+
+    #[account(mut,
+        associated_token::mint = mint_old,
+        associated_token::authority = user_old,
+        associated_token::token_program = token_program)]
+    pub token_account_old: InterfaceAccount<'info, TokenAccount>,*/
+  }
 #[derive(Accounts)]
 pub struct MintAnchor<'info> {
     #[account(mut)]
@@ -842,7 +995,7 @@ pub struct AnchorMinted {
 }
 #[event]
 pub struct MigrateIdentity {
-    pub wallet_old: Pubkey,
+    pub user_old: Pubkey,
     pub wallet_new: Pubkey,
     pub identity_old: Pubkey,
     pub identity_new: Pubkey,

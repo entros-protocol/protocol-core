@@ -59,6 +59,7 @@ let signerKp: Keypair;
 let signer2Kp: Keypair;
 const _expectedErr = "";
 let pdas: Pdas;
+const tokenProgram = TOKEN_2022_PROGRAM_ID;
 let rawAccData: Uint8Array<ArrayBufferLike> | undefined;
 let identity: IdentityStateAcctWeb3js;
 let identityOld: IdentityStateAcctWeb3js;
@@ -88,7 +89,6 @@ test("iamAnchor.mintAnchor() by admin", async () => {
   console.log("\n----------------== iamAnchor.mintAnchor() by admin");
   signerKp = adminKp;
   pdas = pdasBySignerKp(signerKp);
-  const tokenProgram = TOKEN_2022_PROGRAM_ID;
   const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
   const initialCommitment = Buffer.from(fixture.public_inputs[1]);
 
@@ -133,7 +133,6 @@ test("iamAnchor.mintAnchor() by user1", async () => {
   console.log("\n----------------== iamAnchor.mintAnchor() by user1");
   signerKp = user1Kp;
   pdas = pdasBySignerKp(signerKp);
-  const tokenProgram = TOKEN_2022_PROGRAM_ID;
   const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
   const initialCommitment = Buffer.from(fixture.public_inputs[1]);
 
@@ -173,12 +172,20 @@ test("iamAnchor.migrateIdentity() by user1", async () => {
   signerKp = user1Kp;
   pdas = pdasBySignerKp(signerKp);
   const pdasAdmin = pdasBySignerKp(adminKp);
+  const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
 
   migrateIdentity(
     signerKp,
+    pdas.identityPda,
+    pdas.mintPda,
+    mintAuthorityPda,
+    ata,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+    tokenProgram,
+    protocolConfigPda,
+    treasuryPda,
     pdasAdmin.signer,
     pdasAdmin.identityPda,
-    pdas.identityPda,
   );
   rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
   identity = decodeIdentityPdaDev(rawAccData);
@@ -200,4 +207,8 @@ test("iamAnchor.migrateIdentity() by user1", async () => {
 
   expect(balcSol(pdasAdmin.identityPda)).eq(null);
   acctIsNull(pdasAdmin.identityPda);
+  //TODO: test fail:
+  //TODO: Make TokenProgram to close old Mint and burn tokens, close TokenAccount...
+  //acctIsNull(pdasAdmin.mintPda);
+  //acctIsNull(ata);
 });

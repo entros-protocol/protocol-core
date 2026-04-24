@@ -32,10 +32,8 @@ import {
   authorizeNewWallet,
   balcSol,
   day,
-  defaultRecentTimestamps,
   expectTheSameArray,
   getJsTime,
-  getSolTime,
   initializeProtocol,
   migrateIdentity,
   mintAnchor,
@@ -57,10 +55,10 @@ Or use Bun: bun test ./file_path/this_file.ts
 const fixture = loadProofFixture();
 
 let signerKp: Keypair;
-let signer2Kp: Keypair;
+let newWalletKp: Keypair;
 let pdas: Pdas;
-let t1: bigint;
 let trustscorePrev: number;
+const tokenProgram = TOKEN_2022_PROGRAM_ID;
 let rawAccData: Uint8Array<ArrayBufferLike> | undefined;
 let identity: IdentityStateAcctWeb3js;
 let identityOld: IdentityStateAcctWeb3js;
@@ -96,7 +94,6 @@ test("registry.mintAnchor()", async () => {
   console.log("\n----------------== registry.mintAnchor()");
   signerKp = adminKp;
   pdas = pdasBySignerKp(signerKp);
-  const tokenProgram = TOKEN_2022_PROGRAM_ID;
   const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
 
   const initialCommitment = Buffer.from(fixture.public_inputs[1]);
@@ -154,31 +151,27 @@ test("iamAnchor.updateAnchor()", async () => {
 test("iamAnchor.authorizeNewWallet()", async () => {
   console.log("\n----------------== iamAnchor.authorizeNewWallet()");
   signerKp = adminKp;
-  signer2Kp = user1Kp;
+  newWalletKp = user1Kp;
   pdas = pdasBySignerKp(signerKp); //{signer, identityPda, mintPda, nonce, challengePda, verificationPda }
 
   warpTime(13 * day + 7);
-  authorizeNewWallet(adminKp, pdas.identityPda, signer2Kp);
+  authorizeNewWallet(adminKp, pdas.identityPda, newWalletKp);
   rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
   identity = decodeIdentityPdaDev(rawAccData);
   acctEqual(identity.owner, signerKp.publicKey);
   console.log("user1:", user1.toBase58());
-  acctEqual(identity.new_wallet, signer2Kp.publicKey);
+  acctEqual(identity.new_wallet, newWalletKp.publicKey);
 });
 
-test("iamAnchor.mintAnchor() by user1", async () => {
-  console.log("\n----------------== iamAnchor.mintAnchor() by user1");
+test("iamAnchor.migrateIdentity() by user1", async () => {
+  console.log("\n----------------== iamAnchor.migrateIdentity() by user1");
   signerKp = user1Kp;
   pdas = pdasBySignerKp(signerKp);
-  const tokenProgram = TOKEN_2022_PROGRAM_ID;
+  const pdasAdmin = pdasBySignerKp(adminKp);
   const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
-  const initialCommitment = Buffer.from(fixture.public_inputs[1]);
 
-  warpTime(33 * day + 3);
-  t1 = getSolTime();
-  mintAnchor(
+  migrateIdentity(
     signerKp,
-    initialCommitment,
     pdas.identityPda,
     pdas.mintPda,
     mintAuthorityPda,
@@ -187,35 +180,8 @@ test("iamAnchor.mintAnchor() by user1", async () => {
     tokenProgram,
     protocolConfigPda,
     treasuryPda,
-  );
-  rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
-  identity = decodeIdentityPdaDev(rawAccData);
-  acctEqual(identity.owner, signerKp.publicKey);
-  expect(identity.verification_count).to.equal(0);
-  expect(identity.trust_score).to.equal(0);
-  console.log("expected initialCommitment:", initialCommitment.buffer);
-  expect(Buffer.from(identity.current_commitment)).to.deep.equal(
-    initialCommitment,
-  );
-  acctEqual(identity.mint, pdas.mintPda);
-  ataBalCk(ata, BigInt(1), "IdentityMint", 0);
-
-  expect(identity.creation_timestamp).to.equal(t1);
-  expect(identity.last_verification_timestamp).to.equal(t1);
-  expectTheSameArray(identity.recent_timestamps, defaultRecentTimestamps);
-});
-
-test("iamAnchor.migrateIdentity() by user1", async () => {
-  console.log("\n----------------== iamAnchor.migrateIdentity() by user1");
-  signerKp = user1Kp;
-  pdas = pdasBySignerKp(signerKp);
-  const pdasAdmin = pdasBySignerKp(adminKp);
-
-  migrateIdentity(
-    signerKp,
     pdasAdmin.signer,
     pdasAdmin.identityPda,
-    pdas.identityPda,
   );
   rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
   identity = decodeIdentityPdaDev(rawAccData);
@@ -244,6 +210,9 @@ test("iamAnchor.migrateIdentity() by user1", async () => {
   );
   expect(balcSol(pdasAdmin.identityPda)).eq(null);
   acctIsNull(pdasAdmin.identityPda);
+  //TODO: Make TokenProgram to close old Mint and TokenAccount...
+  //acctIsNull(pdasAdmin.mintPda);
+  //acctIsNull(ata);
 });
 
 // TODO: A second successful updateAnchor would need another fixture proof where commitment_prev = public_inputs[0] of the first, which means regenerating fixtures

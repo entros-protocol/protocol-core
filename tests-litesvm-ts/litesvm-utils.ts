@@ -285,9 +285,16 @@ export const expectTheSameArray = (array1: bigint[], array2: bigint[]) => {
 };
 export const migrateIdentity = (
   signer: Keypair,
+  identity_state: PublicKey,
+  mint: PublicKey,
+  mintAuthority: PublicKey,
+  tokenAccount: PublicKey,
+  associatedTokenProgram = ASSOCIATED_TOKEN_PROGRAM_ID,
+  tokenProgram: PublicKey,
+  protocol_config: PublicKey,
+  treasury: PublicKey,
   wallet_old: PublicKey,
   identity_state_old: PublicKey,
-  identity_state_new: PublicKey,
   expectedErr = "",
 ) => {
   const disc = [161, 192, 70, 80, 47, 37, 26, 10]; //copied from Anchor IDL
@@ -296,9 +303,17 @@ export const migrateIdentity = (
   const ix = new TransactionInstruction({
     keys: [
       { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: identity_state, isSigner: false, isWritable: true },
+      { pubkey: mint, isSigner: false, isWritable: true },
+      { pubkey: mintAuthority, isSigner: false, isWritable: false }, //non writable
+      { pubkey: tokenAccount, isSigner: false, isWritable: true },
+      { pubkey: associatedTokenProgram, isSigner: false, isWritable: false },
+      { pubkey: tokenProgram, isSigner: false, isWritable: false },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
+      { pubkey: treasury, isSigner: false, isWritable: true },
       { pubkey: wallet_old, isSigner: false, isWritable: false },
       { pubkey: identity_state_old, isSigner: false, isWritable: true },
-      { pubkey: identity_state_new, isSigner: false, isWritable: true },
     ],
     programId: progAddr,
     data: Buffer.from([...disc]),
@@ -326,7 +341,7 @@ export const updateAnchor = (
     keys: [
       { pubkey: signer.publicKey, isSigner: true, isWritable: true },
       { pubkey: identity_state, isSigner: false, isWritable: true },
-      { pubkey: verification_result, isSigner: false, isWritable: true },
+      { pubkey: verification_result, isSigner: false, isWritable: false },
       { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
       { pubkey: treasury, isSigner: false, isWritable: true },
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },

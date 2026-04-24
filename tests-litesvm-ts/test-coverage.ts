@@ -54,7 +54,6 @@ Or use Bun: bun test ./file_path/this_file.ts
 
 const fixture = loadProofFixture();
 const commitment = Buffer.alloc(32);
-commitment.write("initial_commitment_test", "utf-8");
 
 let signerKp: Keypair;
 let expectedErr = "";
@@ -153,7 +152,6 @@ test("iamVerifier.verifyProof()", async () => {
   console.log("\n----------------== iamVerifier.verifyProof()");
   signerKp = adminKp;
   pdas = pdasBySignerKp(signerKp);
-  const fixture = loadProofFixture();
 
   const proofBytes: Buffer<ArrayBuffer> = Buffer.from(fixture.proof_bytes); // for Rust Vec<u8>
   const publicInputs: number[][] = fixture.public_inputs; // for Rust Vec<[u8; 32]>
@@ -280,7 +278,7 @@ test.skip("iamAnchor.updateAnchor(): 2nd time", async () => {
   );
   rawAccData = readAcct(pdas.identityPda);
   identity = decodeIdentityPdaDev(rawAccData);
-  expect(identity.verification_count).to.equal(0);
+  expect(identity.verification_count).to.equal(2);
   expect(Buffer.from(identity.current_commitment)).to.deep.equal(newCommitment);
 });
 
