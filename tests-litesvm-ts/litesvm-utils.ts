@@ -17,7 +17,7 @@ import {
 } from "litesvm";
 import {
   getPdas,
-  iamAnchorAddr,
+  entrosAnchorAddr,
   loadProofFixture,
   numToBytes,
   registryAddr,
@@ -133,7 +133,7 @@ export const ataBalCk = (
   console.log(name, "token:", amount, amount / BigInt(10 ** decimals));
   expect(amount).eq(expectedAmount);
 };
-//-------------== iamRegistry Program Methods
+//-------------== entrosRegistry Program Methods
 export const initializeProtocol = (
   signer: Keypair,
   protocol_config: PublicKey,
@@ -218,7 +218,7 @@ export const registerValidator = (
   });
   sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
 };
-//-------------== iamAnchor Program Methods
+//-------------== entrosAnchor Program Methods
 export const mintAnchor = (
   signer: Keypair,
   commitment: Buffer<ArrayBuffer>,
@@ -233,7 +233,7 @@ export const mintAnchor = (
   expectedErr = "",
 ) => {
   const disc = [68, 56, 113, 102, 236, 152, 146, 60]; //copied from Anchor IDL
-  const progAddr = iamAnchorAddr;
+  const progAddr = entrosAnchorAddr;
   const argData = [...commitment];
   const blockhash = svm.latestBlockhash();
   const ix = new TransactionInstruction({
@@ -266,7 +266,7 @@ export const updateAnchor = (
   expectedErr = "",
 ) => {
   const disc = [120, 192, 72, 245, 112, 246, 119, 135]; //copied from Anchor IDL
-  const progAddr = iamAnchorAddr;
+  const progAddr = entrosAnchorAddr;
   const new_commitment_array = Array.from(new_commitment);
   console.log("new_commitment_array:", new_commitment_array);
   const argData = [...new_commitment_array, ...verification_nonce];
@@ -295,7 +295,7 @@ export const resetIdentityState = (
   expectedErr = "",
 ) => {
   const disc = [26, 78, 86, 143, 247, 132, 85, 203]; //copied from Anchor IDL
-  const progAddr = iamAnchorAddr;
+  const progAddr = entrosAnchorAddr;
   const argData = [...new_commitment];
   const blockhash = svm.latestBlockhash();
   const ix = new TransactionInstruction({
@@ -407,11 +407,11 @@ export const deployProgram = (
   //solana program dump progAddr pyth.so --url mainnet-beta
   svm.addProgramFromFile(programId, programPath);
 };
-deployProgram("target/deploy/iam_anchor.so", iamAnchorAddr);
-acctExists(iamAnchorAddr);
-deployProgram("target/deploy/iam_registry.so", registryAddr);
+deployProgram("target/deploy/entros_anchor.so", entrosAnchorAddr);
+acctExists(entrosAnchorAddr);
+deployProgram("target/deploy/entros_registry.so", registryAddr);
 acctExists(registryAddr);
-deployProgram("target/deploy/iam_verifier.so", verifierAddr);
+deployProgram("target/deploy/entros_verifier.so", verifierAddr);
 acctExists(verifierAddr);
 console.log("program deployment is successful");
 

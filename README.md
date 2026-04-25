@@ -1,22 +1,22 @@
 # protocol-core
 
-Solana on-chain programs for the IAM Protocol. Three Anchor programs handle identity minting, ZK proof verification, and protocol governance.
+Solana on-chain programs for the Entros Protocol. Three Anchor programs handle identity minting, ZK proof verification, and protocol governance.
 
 ## Programs
 
-**iam-anchor** — Non-transferable identity token. Creates a Token-2022 mint with the NonTransferable extension, mints one token per user, and manages an IdentityState PDA that tracks verification history and Trust Score.
+**entros-anchor** — Non-transferable identity token. Creates a Token-2022 mint with the NonTransferable extension, mints one token per user, and manages an IdentityState PDA that tracks verification history and Trust Score.
 
-**iam-verifier** — ZK proof verification. Accepts Groth16 proofs and public inputs, verifies them on-chain via `groth16-solana`, and manages challenge nonces for anti-replay.
+**entros-verifier** — ZK proof verification. Accepts Groth16 proofs and public inputs, verifies them on-chain via `groth16-solana`, and manages challenge nonces for anti-replay.
 
-**iam-registry** — Protocol configuration and validator management. Stores protocol parameters (trust score weights, challenge expiry, max stake) and handles validator registration with SOL staking.
+**entros-registry** — Protocol configuration and validator management. Stores protocol parameters (trust score weights, challenge expiry, max stake) and handles validator registration with SOL staking.
 
 ## Devnet Program IDs
 
 | Program | ID |
 |---------|-----|
-| iam-registry | `6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW` |
-| iam-verifier | `4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV` |
-| iam-anchor | `GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2` |
+| entros-registry | `6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW` |
+| entros-verifier | `4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV` |
+| entros-anchor | `GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2` |
 
 ## Setup
 

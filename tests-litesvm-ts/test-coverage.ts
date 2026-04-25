@@ -1,48 +1,43 @@
 import { test } from "node:test";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
-import type { Keypair } from "@solana/web3.js";
+import type { Keypair, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
 import {
-  BASE_TRUST_INCREMENT,
-  CHALLENGE_EXPIRY,
-  decodeIdentityPdaDev,
-  decodeProtocolConfigDev,
+  decodeIdentityStateWeb3js,
+  decodeProtocolConfigWeb3js,
+  deriveChallengePda,
+  deriveIdentityPda,
+  deriveMintPda,
   deriveValidatorState,
-  getAta,
-  type IdentityStateAcctWeb3js,
-  iamAnchorAddr,
-  loadProofFixture,
-  MAX_TRUST_SCORE,
-  MIN_STAKE,
+  deriveVerificationPda,
+  generateNonce,
   mintAuthorityPda,
-  type Pdas,
   protocolConfigBump,
   protocolConfigPda,
-  registryAddr,
   treasuryPda,
-  VERIFICATION_FEE,
   vaultPda,
 } from "./encodeDecode.ts";
 import {
   acctEqual,
   acctIsNull,
+  admin,
   adminKp,
   ataBalCk,
   createChallenge,
   expireBlockhash,
+  entrosAnchorAddr,
   initializeProtocol,
   mintAnchor,
-  pdasAdmin,
-  pdasBySignerKp,
   readAcct,
   registerValidator,
+  registryAddr,
   updateAnchor,
   updateProtocolConfig,
   user1Kp,
-  verifyProof,
 } from "./litesvm-utils.ts";
 
 /*
@@ -52,58 +47,61 @@ Then Install NodeJs v25.9.0(or above v22.18.0) to run this TypeScript Natively: 
 Or use Bun: bun test ./file_path/this_file.ts
 */
 
-const fixture = loadProofFixture();
 const commitment = Buffer.alloc(32);
 commitment.write("initial_commitment_test", "utf-8");
 
 let signerKp: Keypair;
+let signer: PublicKey;
 let expectedErr = "";
-let pdas: Pdas;
-let rawAccData: Uint8Array<ArrayBufferLike> | undefined;
-let identity: IdentityStateAcctWeb3js;
+let nonce1: number[]; // [u8, 32]
+let challengePda1: PublicKey;
+let _verificationPda1: PublicKey;
+const MIN_STAKE = BigInt(1_000_000_000);
 
-//Follow z-e2e.ts tests
 test("registry.initializeProtocol()", async () => {
-  console.log("\n----------------== registry.initializeProtocol()");
+  console.log("\n----------------==");
   signerKp = adminKp;
+  signer = signerKp.publicKey;
+  const challenge_expiry = BigInt(300); //i64,
+  const max_trust_score = 10000; //u16,
+  const base_trust_increment = 100; //u16,
+  const verification_fee = BigInt(0);
 
   acctIsNull(protocolConfigPda);
   initializeProtocol(
     signerKp,
     protocolConfigPda,
     MIN_STAKE,
-    CHALLENGE_EXPIRY,
-    MAX_TRUST_SCORE,
-    BASE_TRUST_INCREMENT,
-    VERIFICATION_FEE,
+    challenge_expiry,
+    max_trust_score,
+    base_trust_increment,
+    verification_fee,
   );
-  rawAccData = readAcct(protocolConfigPda, registryAddr);
-  const config = decodeProtocolConfigDev(rawAccData);
-  acctEqual(config.admin, signerKp.publicKey);
-  expect(config.min_stake).eq(MIN_STAKE);
-  expect(config.challenge_expiry).eq(CHALLENGE_EXPIRY);
-  expect(config.max_trust_score).eq(MAX_TRUST_SCORE);
-  expect(config.base_trust_increment).eq(BASE_TRUST_INCREMENT);
-  expect(config.bump).eq(protocolConfigBump);
-  expect(config.verification_fee).eq(VERIFICATION_FEE);
+  const rawAccountData = readAcct(protocolConfigPda, registryAddr);
+  const decoded = decodeProtocolConfigWeb3js(rawAccountData);
+  acctEqual(decoded.admin, signer);
+  expect(decoded.min_stake).eq(MIN_STAKE);
+  expect(decoded.challenge_expiry).eq(challenge_expiry);
+  expect(decoded.max_trust_score).eq(max_trust_score);
+  expect(decoded.base_trust_increment).eq(base_trust_increment);
+  expect(decoded.bump).eq(protocolConfigBump);
+  expect(decoded.verification_fee).eq(verification_fee);
 });
 
-test("iamAnchor.updateAnchor(): calling this before mint_anchor() should fail", async () => {
-  console.log(
-    "\n----------------== iamAnchor.updateAnchor(): calling this before mint_anchor() should fail",
-  );
+test("entrosAnchor.updateAnchor(): calling this before mint_anchor() should fail", async () => {
+  console.log("\n----------------==");
+  //update_anchor() at T=0 → trust score = 100
   signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
-  const newCommitment = Buffer.from(fixture.public_inputs[0]);
+  signer = signerKp.publicKey;
+  const [identityPda] = deriveIdentityPda(signer);
+  const newCommitment = Buffer.alloc(32);
+  newCommitment.write("updated_commitment_v1!", "utf-8");
 
-  expectedErr =
-    "Error Code: InvalidIdentityState. Error Number: 6004. Error Message: Identity state account failed to deserialize";
+  expectedErr = "instruction modified data of an account it does not own";
   updateAnchor(
     signerKp,
     newCommitment,
-    pdas.nonce,
-    pdas.verificationPda,
-    pdas.identityPda,
+    identityPda,
     protocolConfigPda,
     treasuryPda,
     expectedErr,
@@ -111,18 +109,24 @@ test("iamAnchor.updateAnchor(): calling this before mint_anchor() should fail", 
 });
 
 test("registry.mintAnchor()", async () => {
-  console.log("\n----------------== registry.mintAnchor()");
+  console.log("\n----------------==");
   signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
+  signer = signerKp.publicKey;
+  const [identityPda] = deriveIdentityPda(signer);
+  const [mintPda] = deriveMintPda(signer);
   const tokenProgram = TOKEN_2022_PROGRAM_ID;
-  const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
-  const initialCommitment = Buffer.from(fixture.public_inputs[1]);
+  const ata = getAssociatedTokenAddressSync(
+    mintPda,
+    signer,
+    false,
+    tokenProgram,
+  );
 
   mintAnchor(
     signerKp,
-    initialCommitment,
-    pdas.identityPda,
-    pdas.mintPda,
+    commitment,
+    identityPda,
+    mintPda,
     mintAuthorityPda,
     ata,
     ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -130,82 +134,58 @@ test("registry.mintAnchor()", async () => {
     protocolConfigPda,
     treasuryPda,
   );
-  rawAccData = readAcct(pdas.identityPda, iamAnchorAddr);
-  identity = decodeIdentityPdaDev(rawAccData);
-  acctEqual(identity.owner, signerKp.publicKey);
-  expect(identity.verification_count).to.equal(0);
-  expect(identity.trust_score).to.equal(0);
-  console.log("expected initialCommitment:", initialCommitment.buffer);
-  expect(Buffer.from(identity.current_commitment)).to.deep.equal(
-    initialCommitment,
-  );
-  acctEqual(identity.mint, pdas.mintPda);
+  const rawAccountData = readAcct(identityPda, entrosAnchorAddr);
+  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  acctEqual(decoded.owner, signer);
+  expect(decoded.verification_count).to.equal(0);
+  expect(decoded.trust_score).to.equal(0);
+  console.log("expected commitment:", commitment.buffer);
+  expect(Buffer.from(decoded.current_commitment)).to.deep.equal(commitment);
+  acctEqual(decoded.mint, mintPda);
   ataBalCk(ata, BigInt(1), "IdentityMint", 0);
 });
 
-test("iamVerifier.createChallenge()", async () => {
-  console.log("\n----------------== iamVerifier.createChallenge()");
+test("entrosAnchor.updateAnchor(): 1st time", async () => {
+  console.log("\n----------------==");
   signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
-  createChallenge(signerKp, pdas.nonce, pdas.challengePda);
-});
-test("iamVerifier.verifyProof()", async () => {
-  console.log("\n----------------== iamVerifier.verifyProof()");
-  signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
-  const fixture = loadProofFixture();
+  signer = signerKp.publicKey;
+  const [identityPda] = deriveIdentityPda(signer);
+  const newCommitment = Buffer.alloc(32);
+  newCommitment.write("updated_commitment_v2!", "utf-8");
 
-  const proofBytes: Buffer<ArrayBuffer> = Buffer.from(fixture.proof_bytes); // for Rust Vec<u8>
-  const publicInputs: number[][] = fixture.public_inputs; // for Rust Vec<[u8; 32]>
-  verifyProof(
-    signerKp,
-    proofBytes,
-    publicInputs,
-    pdas.nonce,
-    pdas.challengePda,
-    pdas.verificationPda,
-  );
-});
-
-test("iamAnchor.updateAnchor(): 1st time", async () => {
-  console.log("\n----------------== iamAnchor.updateAnchor(): 1st time");
-  signerKp = adminKp;
-  const { identityPda, nonce, verificationPda } = pdasBySignerKp(signerKp); // setupVerifiedUser(signerKp) is broken into pdasBySignerKp, createChallenge, and verifyProof above
-
-  const newCommitment = Buffer.from(fixture.public_inputs[0]);
-
-  expireBlockhash();
   updateAnchor(
     signerKp,
     newCommitment,
-    nonce,
-    verificationPda,
     identityPda,
     protocolConfigPda,
     treasuryPda,
   );
-  rawAccData = readAcct(identityPda);
-  identity = decodeIdentityPdaDev(rawAccData);
-  expect(identity.verification_count).to.equal(1);
-  expect(Buffer.from(identity.current_commitment)).to.deep.equal(newCommitment);
+  const rawAccountData = readAcct(identityPda);
+  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  expect(decoded.verification_count).to.equal(1);
 });
 
-test("iamAnchor.mintAnchor(): 2nd time from the same wallet should fail", async () => {
-  console.log(
-    "\n----------------== iamAnchor.mintAnchor(): 2nd time from the same wallet should fail",
-  );
+test("entrosAnchor.mintAnchor(): 2nd time from the same wallet should fail", async () => {
+  console.log("\n----------------==");
   signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
+  signer = signerKp.publicKey;
+  const [identityPda] = deriveIdentityPda(signer);
+  const [mintPda] = deriveMintPda(signer);
   const tokenProgram = TOKEN_2022_PROGRAM_ID;
-  const ata = getAta(pdas.mintPda, pdas.signer, false, tokenProgram);
+  const ata = getAssociatedTokenAddressSync(
+    mintPda,
+    signer,
+    false,
+    tokenProgram,
+  );
 
   expectedErr = "custom program error: 0x0";
   expireBlockhash();
   mintAnchor(
     signerKp,
     commitment,
-    pdas.identityPda,
-    pdas.mintPda,
+    identityPda,
+    mintPda,
     mintAuthorityPda,
     ata,
     ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -216,13 +196,12 @@ test("iamAnchor.mintAnchor(): 2nd time from the same wallet should fail", async 
   );
 });
 
-test("iamAnchor.updateAnchor(): passing 32 zero bytes as commitment should fail", async () => {
-  console.log(
-    "\n----------------== iamAnchor.updateAnchor(): passing 32 zero bytes as commitment should fail",
-  );
+test("entrosAnchor.updateAnchor(): passing 32 zero bytes as commitment should fail", async () => {
+  console.log("\n----------------==");
   //update_anchor() at T=0 → trust score = 100
   signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
+  signer = signerKp.publicKey;
+  const [identityPda] = deriveIdentityPda(signer);
   const newCommitment = Buffer.alloc(32);
   console.log("newCommitment", newCommitment);
 
@@ -231,95 +210,95 @@ test("iamAnchor.updateAnchor(): passing 32 zero bytes as commitment should fail"
   updateAnchor(
     signerKp,
     newCommitment,
-    pdas.nonce,
-    pdas.verificationPda,
-    pdas.identityPda,
+    identityPda,
     protocolConfigPda,
     treasuryPda,
     expectedErr,
   );
 });
 
-test("iamAnchor.updateAnchor(): a wallet calling this on another wallet's IdentityState should fail", async () => {
-  console.log(
-    "\n----------------== iamAnchor.updateAnchor(): a wallet calling this on another wallet's IdentityState should fail",
-  );
+test("entrosAnchor.updateAnchor(): a wallet calling this on another wallet's IdentityState should fail", async () => {
+  console.log("\n----------------==");
+  //update_anchor() at T=0 → trust score = 100
   signerKp = user1Kp;
-  pdas = pdasAdmin;
-  const newCommitment = Buffer.from(fixture.public_inputs[0]);
+  signer = signerKp.publicKey;
+  const [identityPda] = deriveIdentityPda(admin);
+  const newCommitment = Buffer.alloc(32);
+  newCommitment.write("updated_commitment_v3!", "utf-8");
 
   expectedErr =
     "identity_state. Error Code: ConstraintSeeds. Error Number: 2006. Error Message: A seeds constraint was violated.";
   updateAnchor(
     signerKp,
     newCommitment,
-    pdas.nonce,
-    pdas.verificationPda,
-    pdas.identityPda,
+    identityPda,
     protocolConfigPda,
     treasuryPda,
     expectedErr,
   );
 });
 
-// TODO: A second successful updateAnchor would need another fixture proof where commitment_prev = public_inputs[0] of the first, which means regenerating fixtures
-test.skip("iamAnchor.updateAnchor(): 2nd time", async () => {
-  console.log("\n----------------== iamAnchor.updateAnchor(): 2nd time");
+test("entrosAnchor.updateAnchor()", async () => {
+  console.log("\n----------------==");
   signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
-  const newCommitment = Buffer.from(fixture.public_inputs[0]);
+  signer = signerKp.publicKey;
+  const [identityPda] = deriveIdentityPda(signer);
+  const newCommitment = Buffer.alloc(32);
+  newCommitment.write("updated_commitment_v3!", "utf-8");
 
   updateAnchor(
     signerKp,
     newCommitment,
-    pdas.nonce,
-    pdas.verificationPda,
-    pdas.identityPda,
+    identityPda,
     protocolConfigPda,
     treasuryPda,
   );
-  rawAccData = readAcct(pdas.identityPda);
-  identity = decodeIdentityPdaDev(rawAccData);
-  expect(identity.verification_count).to.equal(0);
-  expect(Buffer.from(identity.current_commitment)).to.deep.equal(newCommitment);
+  const rawAccountData = readAcct(identityPda);
+  const decoded = decodeIdentityStateWeb3js(rawAccountData);
+  expect(decoded.verification_count).to.equal(2);
+  //expect(decoded.trust_score).to.equal(100);
+  expect(Buffer.from(decoded.current_commitment)).to.deep.equal(newCommitment);
 });
 
-//----------------==
-test("iamVerifier.createChallenge(): 2nd time with the same nonce should fail", async () => {
-  console.log(
-    "\n----------------== iamVerifier.createChallenge(): 2nd time with the same nonce should fail",
-  );
+//----------------== iam-Verifier methods
+test("entrosVerifier.createChallenge()", async () => {
+  console.log("\n----------------==");
   signerKp = adminKp;
-  pdas = pdasBySignerKp(signerKp);
+  signer = signerKp.publicKey;
+  nonce1 = generateNonce();
+  const [challengePda] = deriveChallengePda(signer, nonce1);
+  const [verificationPda] = deriveVerificationPda(signer, nonce1);
+  _verificationPda1 = verificationPda;
+  challengePda1 = challengePda;
+  console.log("challengePda:", challengePda.toBase58());
+  createChallenge(signerKp, nonce1, challengePda);
+});
+
+test("entrosVerifier.createChallenge(): 2nd time with the same nonce should fail", async () => {
+  console.log("\n----------------==");
+  signerKp = adminKp;
+  signer = signerKp.publicKey;
 
   expectedErr = "custom program error: 0x0";
   expireBlockhash();
-  createChallenge(signerKp, pdas.nonce, pdas.challengePda, expectedErr);
+  createChallenge(signerKp, nonce1, challengePda1, expectedErr);
 });
 
-test("iamVerifier.createChallenge() with another wallet's challenge should fail", async () => {
-  console.log(
-    "\n----------------== iamVerifier.createChallenge() with another wallet's challenge should fail",
-  );
+test("entrosVerifier.createChallenge() with another wallet's challenge should fail", async () => {
+  console.log("\n----------------==");
   signerKp = user1Kp;
-  const pdasAdmin = pdasBySignerKp(signerKp);
+  console.log("challengePda1:", challengePda1.toBase58());
 
   expectedErr =
     "AnchorError caused by account: challenge. Error Code: ConstraintSeeds. Error Number: 2006. Error Message: A seeds constraint was violated";
-  createChallenge(
-    signerKp,
-    pdasAdmin.nonce,
-    pdasAdmin.challengePda,
-    expectedErr,
-  );
+  createChallenge(signerKp, nonce1, challengePda1, expectedErr);
 });
 
-//----------------==
+//----------------== iam-Registry methods
 test("registry.initializeProtocol(): 2nd time should fail", async () => {
-  console.log(
-    "\n----------------== registry.initializeProtocol(): 2nd time should fail",
-  );
+  console.log("\n----------------==");
   signerKp = adminKp;
+  signer = signerKp.publicKey;
   const challenge_expiry = BigInt(300); //i64,
   const max_trust_score = 10000; //u16,
   const base_trust_increment = 100; //u16,
@@ -340,9 +319,7 @@ test("registry.initializeProtocol(): 2nd time should fail", async () => {
 });
 
 test("registry.updateProtocolConfig() should fail by non-admin", async () => {
-  console.log(
-    "\n----------------== registry.updateProtocolConfig() should fail by non-admin",
-  );
+  console.log("\n----------------==");
   signerKp = user1Kp;
   const verification_fee = BigInt(0);
 
@@ -356,13 +333,13 @@ test("registry.updateProtocolConfig() should fail by non-admin", async () => {
   );
 });
 
+//------== registerValidator
 test("registry.registerValidator() with insufficient SOL", async () => {
-  console.log(
-    "\n----------------== registry.registerValidator() with insufficient SOL",
-  );
+  console.log("\n----------------==");
   signerKp = user1Kp;
+  signer = signerKp.publicKey;
   const minStake = MIN_STAKE - BigInt(100);
-  const [validatorStatePda] = deriveValidatorState(signerKp.publicKey);
+  const [validatorStatePda] = deriveValidatorState(signer);
 
   expectedErr =
     "InsufficientStake. Error Number: 6000. Error Message: Insufficient stake amount";
@@ -375,14 +352,12 @@ test("registry.registerValidator() with insufficient SOL", async () => {
     expectedErr,
   );
 });
-
 test("registry.registerValidator() with sufficient SOL", async () => {
-  console.log(
-    "\n----------------== registry.registerValidator() with sufficient SOL",
-  );
+  console.log("\n----------------==");
   signerKp = user1Kp;
+  signer = signerKp.publicKey;
   const minStake = MIN_STAKE;
-  const [validatorStatePda] = deriveValidatorState(signerKp.publicKey);
+  const [validatorStatePda] = deriveValidatorState(signer);
 
   registerValidator(
     signerKp,
@@ -392,13 +367,11 @@ test("registry.registerValidator() with sufficient SOL", async () => {
     vaultPda,
   );
 });
-
 test("registry.registerValidator(): the same validator registering 2nd time should fail", async () => {
-  console.log(
-    "\n----------------== registry.registerValidator(): the same validator registering 2nd time should fail",
-  );
+  console.log("\n----------------==");
   signerKp = user1Kp;
-  const [validatorStatePda] = deriveValidatorState(signerKp.publicKey);
+  signer = signerKp.publicKey;
+  const [validatorStatePda] = deriveValidatorState(signer);
   const minStake = MIN_STAKE + BigInt(100);
 
   expectedErr = "custom program error: 0x0";

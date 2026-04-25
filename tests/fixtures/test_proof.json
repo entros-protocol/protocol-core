@@ -1,5 +1,5 @@
 {
-  "description": "Valid Groth16 proof for IAM Hamming circuit (distance=10, threshold=30, min_distance=3)",
+  "description": "Valid Groth16 proof for Entros Hamming circuit (distance=10, threshold=30, min_distance=3)",
   "proof_bytes": [
     9,
     34,

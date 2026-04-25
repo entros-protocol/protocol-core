@@ -10,7 +10,7 @@ import {
   decodeIdentityPdaDev,
   deriveIdentityPda,
   deriveMintPda,
-  iamAnchorAddr,
+  entrosAnchorAddr,
   mintAuthorityPda,
   protocolConfigPda,
   treasuryPda,
@@ -71,7 +71,7 @@ test("registry.initializeProtocol()", async () => {
   );
 });
 
-test("iamAnchor.mintAnchor() to establish baseline", async () => {
+test("entrosAnchor.mintAnchor() to establish baseline", async () => {
   signerKp = adminKp;
   signer = signerKp.publicKey;
   const [identityPda] = deriveIdentityPda(signer);
@@ -97,7 +97,7 @@ test("iamAnchor.mintAnchor() to establish baseline", async () => {
     treasuryPda,
   );
 
-  const rawAccountData = readAcct(identityPda, iamAnchorAddr);
+  const rawAccountData = readAcct(identityPda, entrosAnchorAddr);
   const decoded = decodeIdentityPdaDev(rawAccountData);
   acctEqual(decoded.owner, signer);
   expect(decoded.verification_count).to.equal(0);
@@ -109,7 +109,7 @@ test("iamAnchor.mintAnchor() to establish baseline", async () => {
   ataBalCk(ata, BigInt(1), "IdentityMint", 0);
 });
 
-test("iamAnchor.resetIdentityState() happy path on fresh mint", async () => {
+test("entrosAnchor.resetIdentityState() happy path on fresh mint", async () => {
   signerKp = adminKp;
   signer = signerKp.publicKey;
   const [identityPda] = deriveIdentityPda(signer);
@@ -124,7 +124,7 @@ test("iamAnchor.resetIdentityState() happy path on fresh mint", async () => {
     treasuryPda,
   );
 
-  const rawAccountData = readAcct(identityPda, iamAnchorAddr);
+  const rawAccountData = readAcct(identityPda, entrosAnchorAddr);
   const decoded = decodeIdentityPdaDev(rawAccountData);
 
   // Commitment rotated
@@ -141,7 +141,7 @@ test("iamAnchor.resetIdentityState() happy path on fresh mint", async () => {
   expect(Number(decoded.last_reset_timestamp)).to.be.greaterThan(0);
 });
 
-test("iamAnchor.resetIdentityState() fails while cooldown active", async () => {
+test("entrosAnchor.resetIdentityState() fails while cooldown active", async () => {
   signerKp = adminKp;
   signer = signerKp.publicKey;
   const [identityPda] = deriveIdentityPda(signer);
@@ -160,14 +160,14 @@ test("iamAnchor.resetIdentityState() fails while cooldown active", async () => {
   );
 
   // Verify state did not mutate — commitment is still the first-reset value.
-  const rawAccountData = readAcct(identityPda, iamAnchorAddr);
+  const rawAccountData = readAcct(identityPda, entrosAnchorAddr);
   const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
     resetCommitment,
   );
 });
 
-test("iamAnchor.resetIdentityState() succeeds after cooldown elapses", async () => {
+test("entrosAnchor.resetIdentityState() succeeds after cooldown elapses", async () => {
   signerKp = adminKp;
   signer = signerKp.publicKey;
   const [identityPda] = deriveIdentityPda(signer);
@@ -184,7 +184,7 @@ test("iamAnchor.resetIdentityState() succeeds after cooldown elapses", async () 
     treasuryPda,
   );
 
-  const rawAccountData = readAcct(identityPda, iamAnchorAddr);
+  const rawAccountData = readAcct(identityPda, entrosAnchorAddr);
   const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
     resetCommitment2,
@@ -193,7 +193,7 @@ test("iamAnchor.resetIdentityState() succeeds after cooldown elapses", async () 
   expect(decoded.trust_score).to.equal(0);
 });
 
-test("iamAnchor.resetIdentityState() rejects zero commitment", async () => {
+test("entrosAnchor.resetIdentityState() rejects zero commitment", async () => {
   signerKp = adminKp;
   signer = signerKp.publicKey;
   const [identityPda] = deriveIdentityPda(signer);
@@ -212,7 +212,7 @@ test("iamAnchor.resetIdentityState() rejects zero commitment", async () => {
   );
 
   // State still matches the prior successful reset.
-  const rawAccountData = readAcct(identityPda, iamAnchorAddr);
+  const rawAccountData = readAcct(identityPda, entrosAnchorAddr);
   const decoded = decodeIdentityPdaDev(rawAccountData);
   expect(Buffer.from(decoded.current_commitment)).to.deep.equal(
     resetCommitment2,
