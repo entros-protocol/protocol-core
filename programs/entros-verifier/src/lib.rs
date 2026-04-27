@@ -16,11 +16,11 @@ use state::{Challenge, VerificationResult};
 declare_id!("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV");
 
 security_txt! {
-    name: "IAM Verifier",
-    project_url: "https://iamprotocol.io",
-    contacts: "email:contact@iamprotocol.io",
-    policy: "https://iamprotocol.io/security",
-    source_code: "https://github.com/iam-protocol/protocol-core"
+    name: "Entros Verifier",
+    project_url: "https://entros.io",
+    contacts: "email:contact@entros.io",
+    policy: "https://entros.io/security",
+    source_code: "https://github.com/entros-protocol/protocol-core"
 }
 
 /// Default challenge expiry in seconds (5 minutes).
@@ -40,7 +40,7 @@ const MAX_THRESHOLD: u16 = 96;
 const MIN_DISTANCE_FLOOR: u16 = 3;
 
 #[program]
-pub mod iam_verifier {
+pub mod entros_verifier {
     use super::*;
 
     /// Create a verification challenge with a client-generated nonce.
@@ -112,7 +112,7 @@ pub mod iam_verifier {
 
         // Store verification result (only reached for valid proofs).
         // Commitments + bounded circuit parameters are persisted so that
-        // iam-anchor::update_anchor can cross-program read them and enforce
+        // entros-anchor::update_anchor can cross-program read them and enforce
         // that (a) commitment_new matches the submitted new_commitment and
         // (b) commitment_prev matches the identity's stored current_commitment.
         let result = &mut ctx.accounts.verification_result;

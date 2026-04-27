@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "programs/iam-registry",
-    "programs/iam-anchor",
-    "programs/iam-verifier",
+    "programs/entros-registry",
+    "programs/entros-anchor",
+    "programs/entros-verifier",
 ]
 resolver = "2"
 

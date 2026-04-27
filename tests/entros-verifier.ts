@@ -1,7 +1,7 @@
 import type { Program } from "@coral-xyz/anchor";
 import * as anchor from "@coral-xyz/anchor";
 import { expect } from "chai";
-import type { IamVerifier } from "../target/types/iam_verifier";
+import type { EntrosVerifier } from "../target/types/entros_verifier";
 import {
   deriveChallengePda,
   deriveVerificationPda,
@@ -11,11 +11,11 @@ import {
 
 const fixture = loadProofFixture();
 
-describe("iam-verifier", () => {
+describe("entros-verifier", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.iamVerifier as Program<IamVerifier>;
+  const program = anchor.workspace.entrosVerifier as Program<EntrosVerifier>;
   const iamVerifierProgId = program.programId;
 
   it("creates a challenge", async () => {

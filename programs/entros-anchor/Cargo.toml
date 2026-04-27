@@ -1,12 +1,12 @@
 [package]
-name = "iam-anchor"
+name = "entros-anchor"
 version = "0.1.0"
 edition = "2021"
-description = "Non-transferable identity token for IAM Protocol"
+description = "Non-transferable identity token for Entros Protocol"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "iam_anchor"
+name = "entros_anchor"
 
 [features]
 default = []

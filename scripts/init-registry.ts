@@ -1,5 +1,5 @@
 /**
- * One-time initialization of the iam-registry ProtocolConfig on devnet.
+ * One-time initialization of the entros-registry ProtocolConfig on devnet.
  * Run from protocol-core directory: npx ts-node scripts/init-registry.ts
  */
 

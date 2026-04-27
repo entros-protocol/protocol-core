@@ -43,10 +43,10 @@ pub struct VerificationResult {
     /// PDA bump seed
     pub bump: u8,
     /// New fingerprint commitment from public_inputs[0]. Read cross-program
-    /// by iam-anchor::update_anchor to bind the proof to the identity update.
+    /// by entros-anchor::update_anchor to bind the proof to the identity update.
     pub commitment_new: [u8; 32],
     /// Previous fingerprint commitment from public_inputs[1]. Read cross-program
-    /// by iam-anchor::update_anchor to bind to the identity's stored commitment.
+    /// by entros-anchor::update_anchor to bind to the identity's stored commitment.
     pub commitment_prev: [u8; 32],
     /// Hamming threshold from public_inputs[2]. Bounded at proof time to prevent
     /// attacker-chosen circuit parameters.

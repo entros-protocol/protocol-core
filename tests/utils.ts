@@ -4,7 +4,7 @@ import { web3 } from "@coral-xyz/anchor";
 
 type PublicKey = web3.PublicKey;
 
-//--------- iamAnchor
+//--------- entrosAnchor
 export const deriveIdentityPda = (
   user: PublicKey,
   iamAnchorProgId: PublicKey,
@@ -20,7 +20,7 @@ export const deriveMintPda = (user: PublicKey, iamAnchorProgId: PublicKey) =>
     iamAnchorProgId,
   );
 
-//--------- iamVerifier
+//--------- entrosVerifier
 // Load pre-generated Groth16 proof fixture
 export const loadProofFixture = () =>
   JSON.parse(
@@ -74,23 +74,23 @@ export interface BootstrappedUser {
 
 export async function bootstrapVerifiedUser(params: {
   user: web3.Keypair;
-  iamAnchor: any;
-  iamVerifier: any;
+  entrosAnchor: any;
+  entrosVerifier: any;
   fixture: any;
   protocolConfigPda: PublicKey;
   treasuryPda: PublicKey;
   mintAuthorityPda: PublicKey;
 }): Promise<BootstrappedUser> {
-  const { user, iamAnchor, iamVerifier, fixture, protocolConfigPda, treasuryPda, mintAuthorityPda } = params;
+  const { user, entrosAnchor, entrosVerifier, fixture, protocolConfigPda, treasuryPda, mintAuthorityPda } = params;
   const { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } = await import("@solana/spl-token");
 
-  const [identityPda] = deriveIdentityPda(user.publicKey, iamAnchor.programId);
-  const [mintPda] = deriveMintPda(user.publicKey, iamAnchor.programId);
+  const [identityPda] = deriveIdentityPda(user.publicKey, entrosAnchor.programId);
+  const [mintPda] = deriveMintPda(user.publicKey, entrosAnchor.programId);
   const ata = getAssociatedTokenAddressSync(mintPda, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
 
   const initialCommitment = Buffer.from(fixture.public_inputs[1]);
 
-  await iamAnchor.methods
+  await entrosAnchor.methods
     .mintAnchor(Array.from(initialCommitment))
     .accountsStrict({
       user: user.publicKey,
@@ -108,10 +108,10 @@ export async function bootstrapVerifiedUser(params: {
     .rpc();
 
   const nonce = generateNonce();
-  const [challengePda] = deriveChallengePda(user.publicKey, nonce, iamVerifier.programId);
-  const [verificationPda] = deriveVerificationPda(user.publicKey, nonce, iamVerifier.programId);
+  const [challengePda] = deriveChallengePda(user.publicKey, nonce, entrosVerifier.programId);
+  const [verificationPda] = deriveVerificationPda(user.publicKey, nonce, entrosVerifier.programId);
 
-  await iamVerifier.methods
+  await entrosVerifier.methods
     .createChallenge(nonce)
     .accountsStrict({
       challenger: user.publicKey,
@@ -122,7 +122,7 @@ export async function bootstrapVerifiedUser(params: {
     .rpc();
 
   const proofBytes = Buffer.from(fixture.proof_bytes);
-  await iamVerifier.methods
+  await entrosVerifier.methods
     .verifyProof(proofBytes, fixture.public_inputs, nonce)
     .accountsStrict({
       verifier: user.publicKey,

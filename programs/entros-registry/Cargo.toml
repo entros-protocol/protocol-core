@@ -1,12 +1,12 @@
 [package]
-name = "iam-registry"
+name = "entros-registry"
 version = "0.1.0"
 edition = "2021"
-description = "Protocol registry, trust scoring, and validator management for IAM Protocol"
+description = "Protocol registry, trust scoring, and validator management for Entros Protocol"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "iam_registry"
+name = "entros_registry"
 
 [features]
 default = []

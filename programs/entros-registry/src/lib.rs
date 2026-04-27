@@ -25,15 +25,15 @@ fn isqrt(n: u64) -> u64 {
 declare_id!("6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW");
 
 security_txt! {
-    name: "IAM Registry",
-    project_url: "https://iamprotocol.io",
-    contacts: "email:contact@iamprotocol.io",
-    policy: "https://iamprotocol.io/security",
-    source_code: "https://github.com/iam-protocol/protocol-core"
+    name: "Entros Registry",
+    project_url: "https://entros.io",
+    contacts: "email:contact@entros.io",
+    policy: "https://entros.io/security",
+    source_code: "https://github.com/entros-protocol/protocol-core"
 }
 
 #[program]
-pub mod iam_registry {
+pub mod entros_registry {
     use super::*;
 
     /// Initialize the protocol configuration. One-time admin instruction.

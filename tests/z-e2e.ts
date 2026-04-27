@@ -5,20 +5,20 @@ import {
   TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import type { IamRegistry } from "../target/types/iam_registry";
-import type { IamAnchor } from "../target/types/iam_anchor";
-import type { IamVerifier } from "../target/types/iam_verifier";
+import type { EntrosRegistry } from "../target/types/entros_registry";
+import type { EntrosAnchor } from "../target/types/entros_anchor";
+import type { EntrosVerifier } from "../target/types/entros_verifier";
 import { loadProofFixture } from "./utils";
 
 const fixture = loadProofFixture();
 
-describe("e2e: full IAM verification flow", () => {
+describe("e2e: full Entros verification flow", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const registry = anchor.workspace.iamRegistry as Program<IamRegistry>;
-  const iamAnchor = anchor.workspace.iamAnchor as Program<IamAnchor>;
-  const verifier = anchor.workspace.iamVerifier as Program<IamVerifier>;
+  const registry = anchor.workspace.entrosRegistry as Program<EntrosRegistry>;
+  const entrosAnchor = anchor.workspace.entrosAnchor as Program<EntrosAnchor>;
+  const verifier = anchor.workspace.entrosVerifier as Program<EntrosVerifier>;
 
   // Use a fresh user for e2e to avoid conflicts with per-program tests
   const e2eUser = anchor.web3.Keypair.generate();
@@ -33,7 +33,7 @@ describe("e2e: full IAM verification flow", () => {
   );
   const [mintAuthorityPda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint_authority")],
-    iamAnchor.programId
+    entrosAnchor.programId
   );
 
   const [treasuryPda] = anchor.web3.PublicKey.findProgramAddressSync(
@@ -57,7 +57,7 @@ describe("e2e: full IAM verification flow", () => {
     );
     await provider.connection.confirmTransaction(sig);
 
-    // 1. Protocol config (already initialized by iam-registry tests — just verify)
+    // 1. Protocol config (already initialized by entros-registry tests — just verify)
     const config = await registry.account.protocolConfig.fetch(protocolConfigPda);
     expect(config.maxTrustScore).to.equal(10000);
 
@@ -92,11 +92,11 @@ describe("e2e: full IAM verification flow", () => {
     // 3. User mints identity anchor
     const [identityPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("identity"), e2eUser.publicKey.toBuffer()],
-      iamAnchor.programId
+      entrosAnchor.programId
     );
     const [mintPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("mint"), e2eUser.publicKey.toBuffer()],
-      iamAnchor.programId
+      entrosAnchor.programId
     );
     const ata = getAssociatedTokenAddressSync(
       mintPda,
@@ -105,7 +105,7 @@ describe("e2e: full IAM verification flow", () => {
       TOKEN_2022_PROGRAM_ID
     );
 
-    await iamAnchor.methods
+    await entrosAnchor.methods
       .mintAnchor(Array.from(initialCommitment))
       .accountsStrict({
         user: e2eUser.publicKey,
@@ -122,7 +122,7 @@ describe("e2e: full IAM verification flow", () => {
       .signers([e2eUser])
       .rpc();
 
-    let identity = await iamAnchor.account.identityState.fetch(identityPda);
+    let identity = await entrosAnchor.account.identityState.fetch(identityPda);
     expect(identity.verificationCount).to.equal(0);
 
     // 4. Create verification challenge
@@ -176,7 +176,7 @@ describe("e2e: full IAM verification flow", () => {
     // 6. Update anchor with new commitment (trust score auto-computed).
     // Now requires the VerificationResult PDA + nonce as binding evidence —
     // without it, the instruction rejects. This is the post-2026-04-20 patch.
-    await iamAnchor.methods
+    await entrosAnchor.methods
       .updateAnchor(Array.from(newCommitment), nonce)
       .accountsStrict({
         authority: e2eUser.publicKey,
@@ -190,7 +190,7 @@ describe("e2e: full IAM verification flow", () => {
       .rpc();
 
     // 7. Verify final state
-    identity = await iamAnchor.account.identityState.fetch(identityPda);
+    identity = await entrosAnchor.account.identityState.fetch(identityPda);
     expect(identity.verificationCount).to.equal(1);
     // Trust score auto-computed: 1 verification at day 0 → recency 100, base 100, age ~0
     expect(identity.trustScore).to.be.greaterThanOrEqual(100);

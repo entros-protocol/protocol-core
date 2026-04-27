@@ -7,9 +7,9 @@ import {
   transfer,
 } from "@solana/spl-token";
 import { expect } from "chai";
-import type { IamAnchor } from "../target/types/iam_anchor";
-import type { IamRegistry } from "../target/types/iam_registry";
-import type { IamVerifier } from "../target/types/iam_verifier";
+import type { EntrosAnchor } from "../target/types/entros_anchor";
+import type { EntrosRegistry } from "../target/types/entros_registry";
+import type { EntrosVerifier } from "../target/types/entros_verifier";
 import {
   airdrop,
   bootstrapVerifiedUser,
@@ -18,16 +18,16 @@ import {
   loadProofFixture,
 } from "./utils";
 
-describe("iam-anchor", () => {
+describe("entros-anchor", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.iamAnchor as Program<IamAnchor>;
-  const registry = anchor.workspace.iamRegistry as Program<IamRegistry>;
+  const program = anchor.workspace.entrosAnchor as Program<EntrosAnchor>;
+  const registry = anchor.workspace.entrosRegistry as Program<EntrosRegistry>;
   const iamAnchorProgId = program.programId;
 
-  const iamVerifier = anchor.workspace.iamVerifier as Program<IamVerifier>;
-  const iamVerifierProgId = iamVerifier.programId;
+  const entrosVerifier = anchor.workspace.entrosVerifier as Program<EntrosVerifier>;
+  const iamVerifierProgId = entrosVerifier.programId;
   let trustScore1vrf: number;
   let trustScore2vrf: number;
 
@@ -51,7 +51,7 @@ describe("iam-anchor", () => {
 
   before(async () => {
     // Initialize protocol config (needed for update_anchor trust score computation).
-    // Runs before iam-registry tests alphabetically, so we initialize it here.
+    // Runs before entros-registry tests alphabetically, so we initialize it here.
     try {
       await registry.methods
         .initializeProtocol(
@@ -195,8 +195,8 @@ describe("iam-anchor", () => {
 
     const boot = await bootstrapVerifiedUser({
       user,
-      iamAnchor: program,
-      iamVerifier,
+      entrosAnchor: program,
+      entrosVerifier,
       fixture,
       protocolConfigPda,
       treasuryPda,
@@ -232,8 +232,8 @@ describe("iam-anchor", () => {
     await airdrop(provider.connection, victim.publicKey, 3_000_000_000);
     const boot = await bootstrapVerifiedUser({
       user: victim,
-      iamAnchor: program,
-      iamVerifier,
+      entrosAnchor: program,
+      entrosVerifier,
       fixture,
       protocolConfigPda,
       treasuryPda,
@@ -284,8 +284,8 @@ describe("iam-anchor", () => {
 
       const boot = await bootstrapVerifiedUser({
         user,
-        iamAnchor: program,
-        iamVerifier,
+        entrosAnchor: program,
+        entrosVerifier,
         fixture,
         protocolConfigPda,
         treasuryPda,
@@ -331,8 +331,8 @@ describe("iam-anchor", () => {
 
     const boot = await bootstrapVerifiedUser({
       user,
-      iamAnchor: program,
-      iamVerifier,
+      entrosAnchor: program,
+      entrosVerifier,
       fixture,
       protocolConfigPda,
       treasuryPda,
@@ -385,8 +385,8 @@ describe("iam-anchor", () => {
 
     const boot = await bootstrapVerifiedUser({
       user,
-      iamAnchor: program,
-      iamVerifier,
+      entrosAnchor: program,
+      entrosVerifier,
       fixture,
       protocolConfigPda,
       treasuryPda,
@@ -423,8 +423,8 @@ describe("iam-anchor", () => {
     await airdrop(provider.connection, userA.publicKey, 3_000_000_000);
     const bootA = await bootstrapVerifiedUser({
       user: userA,
-      iamAnchor: program,
-      iamVerifier,
+      entrosAnchor: program,
+      entrosVerifier,
       fixture,
       protocolConfigPda,
       treasuryPda,

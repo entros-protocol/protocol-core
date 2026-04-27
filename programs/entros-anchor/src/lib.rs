@@ -11,27 +11,27 @@ use solana_security_txt::security_txt;
 mod errors;
 mod state;
 
-use errors::IamAnchorError;
+use errors::EntrosAnchorError;
 use state::IdentityState;
 
 declare_id!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
 
 security_txt! {
-    name: "IAM Anchor",
-    project_url: "https://iamprotocol.io",
-    contacts: "email:contact@iamprotocol.io",
-    policy: "https://iamprotocol.io/security",
-    source_code: "https://github.com/iam-protocol/protocol-core"
+    name: "Entros Anchor",
+    project_url: "https://entros.io",
+    contacts: "email:contact@entros.io",
+    policy: "https://entros.io/security",
+    source_code: "https://github.com/entros-protocol/protocol-core"
 }
 
-/// iam-registry program ID for cross-program ProtocolConfig PDA validation.
+/// entros-registry program ID for cross-program ProtocolConfig PDA validation.
 /// Decoded from: 6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     81, 130, 250, 230, 30, 253, 246, 69, 82, 96, 7, 173, 78, 160, 131, 188, 70, 106, 173, 59,
     102, 163, 198, 189, 82, 37, 225, 38, 52, 233, 157, 117,
 ]);
 
-/// iam-verifier program ID for cross-program VerificationResult PDA validation.
+/// entros-verifier program ID for cross-program VerificationResult PDA validation.
 /// Decoded from: 4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV
 const VERIFIER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     48, 50, 94, 115, 90, 162, 108, 8, 240, 151, 76, 223, 101, 176, 170, 86, 254, 247, 252, 28,
@@ -50,30 +50,30 @@ const MAX_PROOF_AGE_SECS: i64 = 600;
 /// review cadence. Upgradeable via program redeploy if abuse is observed.
 const RESET_COOLDOWN_SECS: i64 = 604_800;
 
-/// Post-patch size of the iam-verifier `VerificationResult` account.
+/// Post-patch size of the entros-verifier `VerificationResult` account.
 /// Enforced as a length check in update_anchor — accounts created before the
 /// 2026-04-20 binding patch have the smaller legacy layout (114 bytes) and
 /// are rejected with `StaleVerificationResult`. Keep in sync with
-/// `iam_verifier::state::VerificationResult::LEN`.
+/// `entros_verifier::state::VerificationResult::LEN`.
 const VERIFICATION_RESULT_LEN_V2: usize = 182;
 
 /// Anchor discriminator for `VerificationResult` (first 8 bytes of
 /// `sha256("account:VerificationResult")`). Defense-in-depth check that the
-/// referenced account is actually an iam-verifier VerificationResult and not
-/// a same-length account owned by iam-verifier that happens to resolve at
+/// referenced account is actually an entros-verifier VerificationResult and not
+/// a same-length account owned by entros-verifier that happens to resolve at
 /// the PDA seeds.
 const VERIFICATION_RESULT_DISCRIMINATOR: [u8; 8] = [104, 111, 80, 172, 219, 191, 162, 38];
 
 /// Byte offsets into the packed VerificationResult account data (post-patch).
 /// After the 8-byte Anchor discriminator, fields are serialized in struct order.
-/// Keep synchronized with iam-verifier/src/state.rs.
+/// Keep synchronized with entros-verifier/src/state.rs.
 const VR_OFFSET_VERIFIER: usize = 8;
 const VR_OFFSET_VERIFIED_AT: usize = 72;
 const VR_OFFSET_COMMITMENT_NEW: usize = 114;
 const VR_OFFSET_COMMITMENT_PREV: usize = 146;
 
 /// Integer square root via Newton's method (deterministic, no floating point).
-/// Mirrors iam_registry::isqrt — keep implementations in sync.
+/// Mirrors entros_registry::isqrt — keep implementations in sync.
 fn isqrt(n: u64) -> u64 {
     if n == 0 {
         return 0;
@@ -94,17 +94,21 @@ fn isqrt(n: u64) -> u64 {
 //const MINT_SIZE_WITH_NON_TRANSFERABLE: usize = 170;
 
 #[program]
+<<<<<<< HEAD:programs/iam-anchor/src/lib.rs
 pub mod iam_anchor {
 
+=======
+pub mod entros_anchor {
+>>>>>>> upstream/develop:programs/entros-anchor/src/lib.rs
     use super::*;
 
-    /// Mint a new IAM Anchor identity for the caller.
+    /// Mint a new Entros Anchor identity for the caller.
     /// Creates a NonTransferable Token-2022 mint, mints 1 token to the user's ATA,
     /// and initializes the IdentityState PDA.
     pub fn mint_anchor(ctx: Context<MintAnchor>, initial_commitment: [u8; 32]) -> Result<()> {
         require!(
             initial_commitment != [0u8; 32],
-            IamAnchorError::InvalidCommitment
+            EntrosAnchorError::InvalidCommitment
         );
 
         let user_key = ctx.accounts.user.key();
@@ -206,7 +210,7 @@ pub mod iam_anchor {
         identity.bump = ctx.bumps.identity_state;
         identity.recent_timestamps = [0i64; 52];
 
-        // Read verification fee from protocol config (cross-program, iam-registry)
+        // Read verification fee from protocol config (cross-program, entros-registry)
         let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
         let verification_fee = if config_data.len() >= 69 {
             u64::from_le_bytes([
@@ -424,7 +428,7 @@ pub mod iam_anchor {
     /// Trust score is computed automatically from verification history and protocol config.
     /// Handles transparent migration from old (10-slot) to new (52-slot) account layouts.
     ///
-    /// Requires a matching, fresh `VerificationResult` PDA (owned by iam-verifier)
+    /// Requires a matching, fresh `VerificationResult` PDA (owned by entros-verifier)
     /// whose `commitment_new` equals `new_commitment` and whose `commitment_prev`
     /// equals the identity's current stored commitment. Without this binding the
     /// instruction would accept any commitment with no biometric proof — allowing
@@ -444,7 +448,7 @@ pub mod iam_anchor {
     ) -> Result<()> {
         require!(
             new_commitment != [0u8; 32],
-            IamAnchorError::InvalidCommitment
+            EntrosAnchorError::InvalidCommitment
         );
 
         let identity_info = &ctx.accounts.identity_state;
@@ -453,7 +457,7 @@ pub mod iam_anchor {
         // accidentally accepting a program-external account at this PDA.
         require!(
             identity_info.owner == &crate::ID,
-            IamAnchorError::InvalidIdentityState
+            EntrosAnchorError::InvalidIdentityState
         );
         let now = Clock::get()?.unix_timestamp;
         let new_len = IdentityState::LEN;
@@ -484,21 +488,21 @@ pub mod iam_anchor {
         let mut identity = {
             let data = identity_info.try_borrow_data()?;
             IdentityState::try_deserialize(&mut &data[..])
-                .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?
+                .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?
         };
 
         // Verify ownership
         require!(
             identity.owner == ctx.accounts.authority.key(),
-            IamAnchorError::Unauthorized
+            EntrosAnchorError::Unauthorized
         );
 
         // Cross-program validation of the VerificationResult PDA.
         //
         // The account is passed as UncheckedAccount because Anchor's
         // `Account<T>` deserialization requires owner-program equality with the
-        // crate that defined `T`; iam-verifier's state type isn't in scope for
-        // iam-anchor and adding a CPI dependency just to deserialize is
+        // crate that defined `T`; entros-verifier's state type isn't in scope for
+        // entros-anchor and adding a CPI dependency just to deserialize is
         // heavier than raw-bytes validation. This matches the existing
         // cross-program read pattern used for ProtocolConfig below.
         //
@@ -512,62 +516,62 @@ pub mod iam_anchor {
         let vr_info = ctx.accounts.verification_result.to_account_info();
         require!(
             vr_info.owner == &VERIFIER_PROGRAM_ID,
-            IamAnchorError::VerificationResultWrongOwner
+            EntrosAnchorError::VerificationResultWrongOwner
         );
         let vr_data = vr_info.try_borrow_data()?;
         require!(
             vr_data.len() >= VERIFICATION_RESULT_LEN_V2,
-            IamAnchorError::StaleVerificationResult
+            EntrosAnchorError::StaleVerificationResult
         );
-        // Discriminator check: the first 8 bytes must match iam-verifier's
+        // Discriminator check: the first 8 bytes must match entros-verifier's
         // Anchor-computed `sha256("account:VerificationResult")[0..8]`.
         // Prevents a same-length but differently-typed account (e.g. some
         // future Challenge v2 or an orphaned account) from masquerading.
         require!(
             vr_data[0..8] == VERIFICATION_RESULT_DISCRIMINATOR,
-            IamAnchorError::StaleVerificationResult
+            EntrosAnchorError::StaleVerificationResult
         );
         let verifier_pk_bytes: [u8; 32] = vr_data
             [VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
             .try_into()
-            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
         let verifier_pk = Pubkey::new_from_array(verifier_pk_bytes);
         require!(
             verifier_pk == ctx.accounts.authority.key(),
-            IamAnchorError::VerifierMismatch
+            EntrosAnchorError::VerifierMismatch
         );
         let verified_at_bytes: [u8; 8] = vr_data
             [VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
             .try_into()
-            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
         let verified_at = i64::from_le_bytes(verified_at_bytes);
         require!(
             now.saturating_sub(verified_at) <= MAX_PROOF_AGE_SECS,
-            IamAnchorError::ProofExpired
+            EntrosAnchorError::ProofExpired
         );
         let commitment_new_bound: [u8; 32] = vr_data
             [VR_OFFSET_COMMITMENT_NEW..VR_OFFSET_COMMITMENT_NEW + 32]
             .try_into()
-            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
         let commitment_prev_bound: [u8; 32] = vr_data
             [VR_OFFSET_COMMITMENT_PREV..VR_OFFSET_COMMITMENT_PREV + 32]
             .try_into()
-            .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?;
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
         drop(vr_data);
         require!(
             commitment_new_bound == new_commitment,
-            IamAnchorError::CommitmentMismatch
+            EntrosAnchorError::CommitmentMismatch
         );
         require!(
             commitment_prev_bound == identity.current_commitment,
-            IamAnchorError::PrevCommitmentMismatch
+            EntrosAnchorError::PrevCommitmentMismatch
         );
 
         identity.current_commitment = new_commitment;
         identity.verification_count = identity
             .verification_count
             .checked_add(1)
-            .ok_or(IamAnchorError::ArithmeticOverflow)?;
+            .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
         identity.last_verification_timestamp = now;
 
         // Shift recent_timestamps array: drop oldest, prepend newest
@@ -576,12 +580,12 @@ pub mod iam_anchor {
         }
         identity.recent_timestamps[0] = now;
 
-        // Read protocol config (cross-program, iam-registry)
+        // Read protocol config (cross-program, entros-registry)
         // Layout: 8 disc + 32 admin + 8 min_stake + 8 challenge_expiry = offset 56
         let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
         require!(
             config_data.len() >= 69,
-            IamAnchorError::InvalidProtocolConfig
+            EntrosAnchorError::InvalidProtocolConfig
         );
         let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
         let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
@@ -651,7 +655,7 @@ pub mod iam_anchor {
         // Age bonus with diminishing returns
         let age_seconds = now
             .checked_sub(identity.creation_timestamp)
-            .ok_or(IamAnchorError::ArithmeticOverflow)?;
+            .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
         let age_days: u64 = (age_seconds / 86400).try_into().unwrap_or(0);
         let age_bonus = isqrt(age_days.min(365)) * 2;
 
@@ -663,7 +667,7 @@ pub mod iam_anchor {
         // Serialize identity state back to account
         let mut data = identity_info.try_borrow_mut_data()?;
         identity.try_serialize(&mut *data)
-            .map_err(|_| error!(IamAnchorError::IdentitySerializationFailed))?;
+            .map_err(|_| error!(EntrosAnchorError::IdentitySerializationFailed))?;
         drop(data);
 
         // Transfer verification fee from user to protocol treasury
@@ -719,13 +723,13 @@ pub mod iam_anchor {
     ) -> Result<()> {
         require!(
             new_commitment != [0u8; 32],
-            IamAnchorError::InvalidCommitment
+            EntrosAnchorError::InvalidCommitment
         );
 
         let identity_info = &ctx.accounts.identity_state;
         require!(
             identity_info.owner == &crate::ID,
-            IamAnchorError::InvalidIdentityState
+            EntrosAnchorError::InvalidIdentityState
         );
         let now = Clock::get()?.unix_timestamp;
         let new_len = IdentityState::LEN;
@@ -756,12 +760,12 @@ pub mod iam_anchor {
         let mut identity = {
             let data = identity_info.try_borrow_data()?;
             IdentityState::try_deserialize(&mut &data[..])
-                .map_err(|_| error!(IamAnchorError::InvalidIdentityState))?
+                .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?
         };
 
         require!(
             identity.owner == ctx.accounts.authority.key(),
-            IamAnchorError::Unauthorized
+            EntrosAnchorError::Unauthorized
         );
 
         // Cooldown. Legacy accounts have `last_reset_timestamp = 0`
@@ -772,10 +776,10 @@ pub mod iam_anchor {
         let elapsed = now.saturating_sub(identity.last_reset_timestamp);
         require!(
             elapsed >= RESET_COOLDOWN_SECS,
-            IamAnchorError::ResetCooldownActive
+            EntrosAnchorError::ResetCooldownActive
         );
 
-        // Read verification fee from protocol config (cross-program, iam-registry).
+        // Read verification fee from protocol config (cross-program, entros-registry).
         // Same offset as mint_anchor (bytes 61..69 after discriminator).
         let verification_fee = {
             let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
@@ -798,7 +802,7 @@ pub mod iam_anchor {
 
         let mut data = identity_info.try_borrow_mut_data()?;
         identity.try_serialize(&mut *data)
-            .map_err(|_| error!(IamAnchorError::IdentitySerializationFailed))?;
+            .map_err(|_| error!(EntrosAnchorError::IdentitySerializationFailed))?;
         drop(data);
 
         if verification_fee > 0 {
@@ -966,7 +970,7 @@ pub struct MintAnchor<'info> {
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 
-    /// CHECK: Cross-program read of iam-registry ProtocolConfig PDA.
+    /// CHECK: Cross-program read of entros-registry ProtocolConfig PDA.
     #[account(
         seeds = [b"protocol_config"],
         bump,
@@ -974,7 +978,7 @@ pub struct MintAnchor<'info> {
     )]
     pub protocol_config: UncheckedAccount<'info>,
 
-    /// CHECK: Protocol treasury PDA on iam-registry. Receives verification fees.
+    /// CHECK: Protocol treasury PDA on entros-registry. Receives verification fees.
     #[account(
         mut,
         seeds = [b"protocol_treasury"],
@@ -1000,7 +1004,7 @@ pub struct UpdateAnchor<'info> {
     )]
     pub identity_state: UncheckedAccount<'info>,
 
-    /// CHECK: Cross-program read of iam-verifier VerificationResult PDA.
+    /// CHECK: Cross-program read of entros-verifier VerificationResult PDA.
     /// PDA seeds validated by Anchor; layout + owner + cross-field constraints
     /// validated in instruction body. Binds the ZK proof to this specific
     /// update — without this account, update_anchor would accept any commitment
@@ -1012,7 +1016,7 @@ pub struct UpdateAnchor<'info> {
     )]
     pub verification_result: UncheckedAccount<'info>,
 
-    /// CHECK: Cross-program read of iam-registry ProtocolConfig PDA.
+    /// CHECK: Cross-program read of entros-registry ProtocolConfig PDA.
     /// Validated by seeds + owner via seeds::program.
     #[account(
         seeds = [b"protocol_config"],
@@ -1021,7 +1025,7 @@ pub struct UpdateAnchor<'info> {
     )]
     pub protocol_config: UncheckedAccount<'info>,
 
-    /// CHECK: Protocol treasury PDA on iam-registry. Receives verification fees.
+    /// CHECK: Protocol treasury PDA on entros-registry. Receives verification fees.
     #[account(
         mut,
         seeds = [b"protocol_treasury"],
@@ -1049,7 +1053,7 @@ pub struct ResetIdentityState<'info> {
     )]
     pub identity_state: UncheckedAccount<'info>,
 
-    /// CHECK: Cross-program read of iam-registry ProtocolConfig PDA.
+    /// CHECK: Cross-program read of entros-registry ProtocolConfig PDA.
     /// Supplies the verification fee amount charged on reset.
     #[account(
         seeds = [b"protocol_config"],
@@ -1058,7 +1062,7 @@ pub struct ResetIdentityState<'info> {
     )]
     pub protocol_config: UncheckedAccount<'info>,
 
-    /// CHECK: Protocol treasury PDA on iam-registry. Receives the reset fee.
+    /// CHECK: Protocol treasury PDA on entros-registry. Receives the reset fee.
     #[account(
         mut,
         seeds = [b"protocol_treasury"],

@@ -1,6 +1,6 @@
 // Mock Groth16 verification for Phase 1.
 //
-// Accepts any proof where the first 4 bytes equal [0x49, 0x41, 0x4D, 0x01] ("IAM\x01").
+// Accepts any proof where the first 4 bytes equal [0x49, 0x41, 0x4D, 0x01] ("Entros\x01").
 // This magic prefix allows tests to construct valid/invalid proofs trivially.
 //
 // In Phase 2, this is replaced by groth16_solana::groth16::Groth16Verifier

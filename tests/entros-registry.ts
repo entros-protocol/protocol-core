@@ -1,13 +1,13 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { expect } from "chai";
-import type { IamRegistry } from "../target/types/iam_registry";
+import type { EntrosRegistry } from "../target/types/entros_registry";
 
-describe("iam-registry", () => {
+describe("entros-registry", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.iamRegistry as Program<IamRegistry>;
+  const program = anchor.workspace.entrosRegistry as Program<EntrosRegistry>;
   const admin = provider.wallet;
 
   const [protocolConfigPda] = anchor.web3.PublicKey.findProgramAddressSync(
@@ -32,7 +32,7 @@ describe("iam-registry", () => {
   const VERIFICATION_FEE = new anchor.BN(0); // 0 for existing tests
 
   it("initializes protocol config", async () => {
-    // May already be initialized by iam-anchor's before block (alphabetical test ordering).
+    // May already be initialized by entros-anchor's before block (alphabetical test ordering).
     // Initialize if needed, then verify the config is correct regardless.
     try {
       await program.methods

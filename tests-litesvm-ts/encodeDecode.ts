@@ -25,44 +25,25 @@ import {
   getU64Encoder,
   lamports,
 } from "@solana/kit";
+<<<<<<< HEAD
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
+=======
+>>>>>>> upstream/develop
 import { Keypair, PublicKey } from "@solana/web3.js";
+import { entrosAnchorAddr, registryAddr, verifierAddr } from "./litesvm-utils.ts";
 
-//-----------== Basic settings
-export const iamAnchorAddr = new PublicKey(
-  "GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2",
-);
-console.log("iamAnchorAddr:", iamAnchorAddr.toBase58());
-
-export const registryAddr = new PublicKey(
-  "6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW",
-);
-console.log("registryAddr:", registryAddr.toBase58());
-
-export const verifierAddr = new PublicKey(
-  "4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV",
-);
-console.log("verifierAddr:", verifierAddr.toBase58());
-
-export const MIN_STAKE = BigInt(1_000_000_000);
-console.log("MIN_STAKE:", MIN_STAKE); // 1 SOL
-export const CHALLENGE_EXPIRY = BigInt(300); //i64,
-export const MAX_TRUST_SCORE = 10000; //u16,
-export const BASE_TRUST_INCREMENT = 100; //u16,
-export const VERIFICATION_FEE = BigInt(0);
-
-//-----------== iamRegistry
+//-----------==
 export const [treasuryPda] = PublicKey.findProgramAddressSync(
   [Buffer.from("protocol_treasury")],
   registryAddr,
 );
 console.log("treasuryPda:", treasuryPda.toBase58());
-//-----------== iamVerifier
+//-----------== entrosVerifier
 // Load pre-generated Groth16 proof fixture
 export const loadProofFixture = () =>
   JSON.parse(
@@ -91,6 +72,7 @@ export const [vaultPda] = PublicKey.findProgramAddressSync(
   [Buffer.from("vault")],
   registryAddr,
 );
+<<<<<<< HEAD
 //-------------==
 export type Pdas = {
   identityPda: PublicKey;
@@ -119,33 +101,18 @@ export const getPdas = (
     ata,
   };
 };
+=======
+>>>>>>> upstream/develop
 
-//-----------==
-export const getAta = (
-  mint: PublicKey,
-  owner: PublicKey,
-  allowOwnerOffCurve = true,
-  programId = TOKEN_PROGRAM_ID,
-  associatedTokenProgramId = ASSOCIATED_TOKEN_PROGRAM_ID,
-) => {
-  const ata = getAssociatedTokenAddressSync(
-    mint,
-    owner,
-    allowOwnerOffCurve,
-    programId,
-    associatedTokenProgramId,
-  );
-  return ata;
-};
-//-----------== iamAnchor
+//-----------== entrosAnchor
 export const deriveMintPda = (user: PublicKey) =>
   PublicKey.findProgramAddressSync(
     [Buffer.from("mint"), user.toBuffer()],
-    iamAnchorAddr,
+    entrosAnchorAddr,
   );
 export const [mintAuthorityPda] = PublicKey.findProgramAddressSync(
   [Buffer.from("mint_authority")],
-  iamAnchorAddr,
+  entrosAnchorAddr,
 );
 console.log("mintAuthorityPda:", mintAuthorityPda.toBase58());
 
@@ -153,7 +120,7 @@ console.log("mintAuthorityPda:", mintAuthorityPda.toBase58());
 export const deriveIdentityPda = (user: PublicKey) =>
   PublicKey.findProgramAddressSync(
     [Buffer.from("identity"), user.toBuffer()],
-    iamAnchorAddr,
+    entrosAnchorAddr,
   );
 export type IdentityStateAcct = {
   anchorDiscriminator: ReadonlyUint8Array;
@@ -208,7 +175,7 @@ export const decodeIdentityState = (
   return decoded;
 };
 // This below is only used for @solana/web3.js as it is outputing PublicKey, not Address
-export const decodeIdentityPdaDev = (
+export const decodeIdentityStateWeb3js = (
   bytes: ReadonlyUint8Array | Uint8Array<ArrayBufferLike> | undefined,
 ) => {
   if (!bytes) throw new Error("bytes invalid");
@@ -289,12 +256,12 @@ export const decodeProtocolConfig = (
   return decoded;
 };
 // This below is only used for @solana/web3.js as it is outputing PublicKey, not Address
-export const decodeProtocolConfigDev = (
+export const decodeProtocolConfigWeb3js = (
   bytes: ReadonlyUint8Array | Uint8Array<ArrayBufferLike> | undefined,
 ) => {
   if (!bytes) throw new Error("bytes invalid");
   const decoded = decodeProtocolConfig(bytes, true);
-  const decodedV1: ProtocolConfigAcctDev = {
+  const decodedV1: ProtocolConfigAcctWeb3js = {
     admin: new PublicKey(decoded.admin.toString()),
     min_stake: decoded.min_stake,
     challenge_expiry: decoded.challenge_expiry,
@@ -306,7 +273,7 @@ export const decodeProtocolConfigDev = (
   };
   return decodedV1;
 };
-export type ProtocolConfigAcctDev = {
+export type ProtocolConfigAcctWeb3js = {
   admin: PublicKey;
   min_stake: bigint;
   challenge_expiry: bigint;

@@ -2,14 +2,14 @@
 
 Measured via `sol_log_compute_units()` on localnet with `anchor test`. Default limit is 200,000 CU per instruction. Ranges reflect variance across multiple test runs. Last verified: 2026-04-18.
 
-## iam-anchor
+## entros-anchor
 
 | Instruction | CU Consumed | Headroom | Notes |
 |-------------|-------------|----------|-------|
 | mint_anchor | 46,539 - 58,539 | ~142K - 154K | Range from Token-2022 account creation variance |
 | update_anchor | 6,778 | ~193K | Includes trust score computation + timestamp update |
 
-## iam-registry
+## entros-registry
 
 | Instruction | CU Consumed | Headroom | Notes |
 |-------------|-------------|----------|-------|
@@ -21,7 +21,7 @@ Measured via `sol_log_compute_units()` on localnet with `anchor test`. Default l
 | withdraw_treasury | ~5,000 (est.) | ~195K | SOL transfer from treasury |
 | migrate_admin | ~3,000 (est.) | ~197K | Single field change |
 
-## iam-verifier
+## entros-verifier
 
 | Instruction | CU Consumed | Headroom | Notes |
 |-------------|-------------|----------|-------|

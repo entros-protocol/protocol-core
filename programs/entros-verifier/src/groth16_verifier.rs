@@ -4,11 +4,11 @@ use groth16_solana::groth16::Groth16Verifier;
 use crate::errors::VerifierError;
 use crate::verifying_key::VERIFYINGKEY;
 
-/// Number of public inputs for the IAM Hamming circuit.
+/// Number of public inputs for the Entros Hamming circuit.
 /// commitment_new, commitment_prev, threshold, min_distance
 const NR_PUBLIC_INPUTS: usize = 4;
 
-/// Verify a Groth16 proof against the IAM Hamming circuit verification key.
+/// Verify a Groth16 proof against the Entros Hamming circuit verification key.
 ///
 /// # Arguments
 /// * `proof_bytes` - 256 bytes: proof_a (64, negated) + proof_b (128) + proof_c (64)
