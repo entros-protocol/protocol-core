@@ -99,6 +99,31 @@ test("registry.initializeProtocol()", async () => {
   expect(config.verification_fee).eq(VERIFICATION_FEE);
 });
 
+test("ProtocolConfig byte offsets match Borsh layout", async () => {
+  console.log(
+    "\n----------------== ProtocolConfig byte offsets match Borsh layout",
+  );
+  // entros-anchor reads ProtocolConfig fields via hardcoded byte offsets on
+  // an UncheckedAccount + raw try_borrow_data. If state.rs reorders fields
+  // or changes a field type, the IDL deserialization shifts but the raw
+  // reads do not — this test fails fast on that drift.
+  if (!rawAccData) {
+    throw new Error("rawAccData not initialized — initializeProtocol must run first");
+  }
+  const config = decodeProtocolConfigDev(rawAccData);
+  const view = new DataView(
+    rawAccData.buffer,
+    rawAccData.byteOffset,
+    rawAccData.byteLength,
+  );
+
+  // Mirror the hardcoded offsets read by programs/entros-anchor/src/lib.rs.
+  expect(view.getUint16(56, true)).eq(config.max_trust_score);
+  expect(view.getUint16(58, true)).eq(config.base_trust_increment);
+  expect(view.getBigUint64(61, true)).eq(config.verification_fee);
+  expect(view.getBigUint64(69, true)).eq(config.migration_fee);
+});
+
 test("entrosAnchor.updateAnchor(): calling this before mint_anchor() should fail", async () => {
   console.log(
     "\n----------------== entrosAnchor.updateAnchor(): calling this before mint_anchor() should fail",

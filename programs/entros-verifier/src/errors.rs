@@ -16,4 +16,6 @@ pub enum VerifierError {
     ChallengeNotUsed,
     #[msg("Invalid nonce: must not be all zeros")]
     InvalidNonce,
+    #[msg("Arithmetic overflow")]
+    ArithmeticOverflow,
 }

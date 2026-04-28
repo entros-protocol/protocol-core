@@ -30,4 +30,6 @@ pub enum EntrosAnchorError {
     ResetCooldownActive,
     #[msg("caller is not authorized by the old identity")]
     UnauthorizedNewWallet,
+    #[msg("VerificationResult.verified_at is in the future relative to the cluster clock")]
+    ProofFromFuture,
 }

@@ -52,7 +52,9 @@ pub mod entros_verifier {
         challenge.challenger = ctx.accounts.challenger.key();
         challenge.nonce = nonce;
         challenge.created_at = now;
-        challenge.expires_at = now + DEFAULT_CHALLENGE_EXPIRY;
+        challenge.expires_at = now
+            .checked_add(DEFAULT_CHALLENGE_EXPIRY)
+            .ok_or(VerifierError::ArithmeticOverflow)?;
         challenge.used = false;
         challenge.bump = ctx.bumps.challenge;
 

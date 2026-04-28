@@ -260,7 +260,9 @@ pub mod entros_registry {
         let age_seconds = now
             .checked_sub(creation_timestamp)
             .ok_or(RegistryError::ArithmeticOverflow)?;
-        let age_days: u64 = (age_seconds / 86400).try_into().unwrap_or(0);
+        // Saturate negative ages (clock-rollback edge case) to 0 days. The
+        // u64 cast is then lossless because age_days is always non-negative.
+        let age_days: u64 = (age_seconds / 86400).max(0) as u64;
         let age_bonus = isqrt(age_days.min(365)) * 2;
 
         // 4. Combine
