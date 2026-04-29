@@ -74,10 +74,16 @@ pub mod entros_registry {
     }
 
     /// Set the validator signing pubkey used for mint receipt binding
-    /// (master-list #146 Phase 3). Admin-only. The same Anchor realloc
-    /// constraint resizes the account from the legacy 77-byte layout to
-    /// the new 109-byte layout in one call when first run on devnet.
-    /// Subsequent calls are rotation: same length, new pubkey.
+    /// (master-list #146 Phase 3). Admin-only. Resizes the account from
+    /// any legacy layout (69 bytes pre-migration_fee, 77 bytes
+    /// pre-validator_pubkey) up to the current 109-byte layout in a
+    /// single call. Subsequent rotation calls realloc is a no-op.
+    ///
+    /// Uses raw-byte access (mirrors `migrate_admin`) rather than
+    /// `Account<ProtocolConfig>` because Anchor's typed wrapper
+    /// deserializes BEFORE realloc, and a smaller-than-current legacy
+    /// account would fail deserialization with `AccountDidNotDeserialize`
+    /// before the resize could fix it.
     ///
     /// Zero pubkey is rejected — entros-anchor treats a zero pubkey as
     /// "receipts not yet configured" and skips the on-chain check, so
@@ -91,8 +97,54 @@ pub mod entros_registry {
             RegistryError::InvalidValidatorPubkey
         );
 
-        let config = &mut ctx.accounts.protocol_config;
-        config.validator_pubkey = validator_pubkey;
+        let config_info = &ctx.accounts.protocol_config;
+
+        // Verify admin matches the on-chain ProtocolConfig.admin field
+        // (offset 8, 32 bytes). Read raw because the struct may not yet
+        // be fully populated up to the new layout's tail bytes.
+        {
+            let data = config_info.try_borrow_data()?;
+            require!(data.len() >= 40, RegistryError::InvalidProtocolConfig);
+            let stored_admin = Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(RegistryError::InvalidProtocolConfig))?;
+            require!(
+                stored_admin == ctx.accounts.admin.key(),
+                RegistryError::Unauthorized
+            );
+        }
+
+        // Resize to the current layout if the account predates one or more
+        // field additions. `realloc(_, true)` zero-fills the new bytes,
+        // which leaves any unset intermediate fields (e.g. migration_fee)
+        // at zero — safe defaults that match `Default::default()`.
+        let new_len = ProtocolConfig::LEN;
+        let current_len = config_info.data_len();
+        if current_len < new_len {
+            config_info.realloc(new_len, true)?;
+
+            let rent = Rent::get()?;
+            let required = rent.minimum_balance(new_len);
+            let current = config_info.lamports();
+            if required > current {
+                system_program::transfer(
+                    CpiContext::new(
+                        ctx.accounts.system_program.to_account_info(),
+                        system_program::Transfer {
+                            from: ctx.accounts.admin.to_account_info(),
+                            to: config_info.to_account_info(),
+                        },
+                    ),
+                    required - current,
+                )?;
+            }
+        }
+
+        // Write validator_pubkey at its canonical offset.
+        let mut data = config_info.try_borrow_mut_data()?;
+        data[ProtocolConfig::OFFSET_VALIDATOR_PUBKEY
+            ..ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32]
+            .copy_from_slice(validator_pubkey.as_ref());
+        drop(data);
 
         emit!(ValidatorPubkeySet {
             admin: ctx.accounts.admin.key(),
@@ -416,25 +468,20 @@ pub struct UpdateProtocolConfig<'info> {
 
 #[derive(Accounts)]
 pub struct SetValidatorPubkey<'info> {
-    #[account(
-        mut,
-        constraint = protocol_config.admin == admin.key() @ RegistryError::Unauthorized
-    )]
+    #[account(mut)]
     pub admin: Signer<'info>,
 
-    /// Anchor realloc resizes the account from the legacy 77-byte layout
-    /// to the new 109-byte layout the first time this instruction runs
-    /// against an existing devnet ProtocolConfig. Subsequent calls
-    /// (rotation) realloc is a no-op — same length on both sides.
+    /// CHECK: ProtocolConfig PDA. Read and written via raw bytes to
+    /// handle pre-migration accounts (69 bytes pre-migration_fee,
+    /// 77 bytes pre-validator_pubkey) that don't deserialize as the
+    /// current struct. Same pattern as `migrate_admin`. Realloc + admin
+    /// authorisation are both done in the instruction body.
     #[account(
         mut,
-        realloc = ProtocolConfig::LEN,
-        realloc::payer = admin,
-        realloc::zero = false,
         seeds = [b"protocol_config"],
-        bump = protocol_config.bump,
+        bump,
     )]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    pub protocol_config: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
