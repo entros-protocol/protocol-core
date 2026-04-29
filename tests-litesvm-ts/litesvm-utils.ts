@@ -23,6 +23,7 @@ import {
   loadProofFixture,
   numToBytes,
   registryAddr,
+  INSTRUCTIONS_SYSVAR,
   SYSTEM_PROGRAM,
   verifierAddr,
 } from "./encodeDecode.ts";
@@ -223,6 +224,32 @@ export const updateProtocolConfig = (
   sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
 };
 
+/// Set the validator signing pubkey for mint receipt binding
+/// (master-list #146 Phase 3). Admin-only. Triggers ProtocolConfig
+/// realloc 77 -> 109 bytes on first call against a legacy account.
+export const setValidatorPubkey = (
+  signer: Keypair, //admin
+  validator_pubkey: PublicKey,
+  protocol_config: PublicKey,
+  expectedErr = "",
+) => {
+  // sha256("global:set_validator_pubkey")[:8]
+  const disc = [158, 194, 32, 54, 85, 123, 13, 80];
+  const progAddr = registryAddr;
+  const argData = [...validator_pubkey.toBytes()];
+  const blockhash = svm.latestBlockhash();
+  const ix = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: protocol_config, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    programId: progAddr,
+    data: Buffer.from([...disc, ...argData]),
+  });
+  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+};
+
 export const registerValidator = (
   signer: Keypair, //admin
   min_stake: bigint,
@@ -373,6 +400,10 @@ export const mintAnchor = (
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
       { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
       { pubkey: treasury, isSigner: false, isWritable: true },
+      // Instructions sysvar — required by master-list #146 Phase 3
+      // mint receipt verification. Read-only; safe to pass even when
+      // there's no preceding Ed25519 ix (handler logs and proceeds).
+      { pubkey: INSTRUCTIONS_SYSVAR, isSigner: false, isWritable: false },
     ],
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),

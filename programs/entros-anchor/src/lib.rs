@@ -72,6 +72,52 @@ const VR_OFFSET_VERIFIED_AT: usize = 72;
 const VR_OFFSET_COMMITMENT_NEW: usize = 114;
 const VR_OFFSET_COMMITMENT_PREV: usize = 146;
 
+/// Maximum age of a validator-signed mint receipt accepted by mint_anchor
+/// (master-list #146). 5 minutes matches the validator's signing-time
+/// window and gives realistic headroom for slow networks + wallet UX.
+const MAX_RECEIPT_AGE_SECS: i64 = 300;
+
+/// Byte offset of `ProtocolConfig.validator_pubkey` (32 bytes). Keep in
+/// sync with `entros_registry::state::ProtocolConfig::OFFSET_VALIDATOR_PUBKEY`.
+/// Reading at this offset requires `data.len() >= 109` — pre-migration
+/// ProtocolConfig accounts (77 bytes) trip the length guard and the
+/// receipt check is skipped (Phase 3 is log-only either way).
+const PC_OFFSET_VALIDATOR_PUBKEY: usize = 77;
+const PC_LEN_WITH_VALIDATOR_PUBKEY: usize = 109;
+
+/// Length of the validator-signed receipt message:
+///   wallet_pubkey (32) || commitment_new (32) || validated_at i64 LE (8)
+/// Keep in sync with `entros_validation::receipts::RECEIPT_MESSAGE_LEN`.
+const RECEIPT_MESSAGE_LEN: usize = 72;
+
+/// Solana Ed25519Program::verify program ID
+/// (`Ed25519SigVerify111111111111111111111111111`). Hardcoded because
+/// `solana_program::ed25519_program` is not exposed in the version of
+/// Anchor we're on; the pubkey is permanent SVM precompile address.
+const ED25519_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    3, 125, 70, 214, 124, 147, 251, 190, 18, 249, 66, 143, 131, 141, 64, 255, 5, 112, 116, 73, 39,
+    244, 138, 100, 252, 202, 112, 68, 128, 0, 0, 0,
+]);
+
+/// Field offsets in the Ed25519Program::verify instruction header
+/// (16 bytes total). See the Solana docs for the precompile layout —
+/// these constants pin the parser to the format we expect and make
+/// audit re-reads cheap.
+const ED25519_HEADER_LEN: usize = 16;
+const ED25519_NUM_SIG_OFFSET: usize = 0;
+const ED25519_SIG_IX_INDEX_OFFSET: usize = 4;
+const ED25519_PUBKEY_OFFSET_OFFSET: usize = 6;
+const ED25519_PUBKEY_IX_INDEX_OFFSET: usize = 8;
+const ED25519_MSG_OFFSET_OFFSET: usize = 10;
+const ED25519_MSG_SIZE_OFFSET: usize = 12;
+const ED25519_MSG_IX_INDEX_OFFSET: usize = 14;
+/// Sentinel for the *_instruction_index fields meaning "this instruction".
+/// Any other value is a cross-instruction reference, which would let the
+/// signed pubkey or message data live in a different ix while we naively
+/// parse it from this ix's data — closing that door is what defends
+/// against substitution attacks under Phase 5 enforcement.
+const ED25519_IX_INDEX_CURRENT: u16 = 0xFFFF;
+
 /// Integer square root via Newton's method (deterministic, no floating point).
 /// Mirrors entros_registry::isqrt — keep implementations in sync.
 fn isqrt(n: u64) -> u64 {
@@ -85,6 +131,162 @@ fn isqrt(n: u64) -> u64 {
         y = (x + n / x) / 2;
     }
     x
+}
+
+/// Verify the validator-signed mint receipt embedded as an
+/// `Ed25519Program::verify` instruction preceding the current `mint_anchor`
+/// call (master-list #146 Phase 3).
+///
+/// Phase 3 is **log-only**: every failed check emits a `msg!` and returns
+/// `Ok(())` so the SDK has time to roll out the receipt-bundling code
+/// (Phase 4) before enforcement (Phase 5) flips to `return Err(...)`.
+///
+/// The receipt message layout matches the validator's canonical form:
+///   `wallet_pubkey (32) || commitment_new (32) || validated_at i64 LE (8) = 72 bytes`
+///
+/// Solana's Ed25519Program runtime verifies the signature itself before
+/// our instruction runs — if `mint_anchor` is reached AND a preceding
+/// Ed25519 ix exists, the cryptography is already known good. This helper
+/// checks the *binding*: that the right validator signed, that the
+/// signed payload matches the actual mint, and that the receipt is fresh.
+fn verify_mint_receipt(
+    instructions_sysvar: &AccountInfo,
+    validator_pubkey: &[u8; 32],
+    expected_wallet: &Pubkey,
+    expected_commitment: &[u8; 32],
+    now: i64,
+) -> Result<()> {
+    use anchor_lang::solana_program::sysvar::instructions::{
+        load_current_index_checked, load_instruction_at_checked,
+    };
+
+    // Zero-pubkey indicates the protocol admin has not yet run
+    // `set_validator_pubkey` to migrate ProtocolConfig. Skip silently.
+    if validator_pubkey == &[0u8; 32] {
+        msg!("RECEIPT: validator_pubkey not configured; skipping (pre-migration)");
+        return Ok(());
+    }
+
+    let current_index = load_current_index_checked(instructions_sysvar)? as usize;
+    if current_index == 0 {
+        msg!("RECEIPT: no preceding instruction (mint_anchor is first in tx)");
+        return Ok(());
+    }
+
+    let prev = load_instruction_at_checked(current_index - 1, instructions_sysvar)?;
+    if prev.program_id != ED25519_PROGRAM_ID {
+        msg!("RECEIPT: preceding instruction is not Ed25519Program");
+        return Ok(());
+    }
+
+    // Ed25519Program::verify instruction layout — see ED25519_*_OFFSET
+    // constants above. Header is 16 bytes; pubkey/signature/message
+    // payloads follow at the offsets the header declares.
+    let data = &prev.data;
+    if data.len() < ED25519_HEADER_LEN {
+        msg!("RECEIPT: malformed Ed25519 ix header (length {})", data.len());
+        return Ok(());
+    }
+    if data[ED25519_NUM_SIG_OFFSET] != 1 {
+        msg!(
+            "RECEIPT: expected single-signature ix, got {}",
+            data[ED25519_NUM_SIG_OFFSET]
+        );
+        return Ok(());
+    }
+
+    // Reject cross-instruction references. Solana's Ed25519Program supports
+    // *_instruction_index fields that point at OTHER instructions' data;
+    // an attacker could verify a legitimately-signed payload in one ix and
+    // make this ix's offsets point at a *different* pubkey/message that
+    // we'd naively parse here — bypassing the binding while passing the
+    // signature check. Pinning all three to 0xFFFF (current ix) closes
+    // that substitution attack. Tx-builder produces 0xFFFF for inline
+    // receipts so legitimate clients are unaffected.
+    let sig_ix_index = u16::from_le_bytes([
+        data[ED25519_SIG_IX_INDEX_OFFSET],
+        data[ED25519_SIG_IX_INDEX_OFFSET + 1],
+    ]);
+    let pk_ix_index = u16::from_le_bytes([
+        data[ED25519_PUBKEY_IX_INDEX_OFFSET],
+        data[ED25519_PUBKEY_IX_INDEX_OFFSET + 1],
+    ]);
+    let msg_ix_index = u16::from_le_bytes([
+        data[ED25519_MSG_IX_INDEX_OFFSET],
+        data[ED25519_MSG_IX_INDEX_OFFSET + 1],
+    ]);
+    if sig_ix_index != ED25519_IX_INDEX_CURRENT
+        || pk_ix_index != ED25519_IX_INDEX_CURRENT
+        || msg_ix_index != ED25519_IX_INDEX_CURRENT
+    {
+        msg!(
+            "RECEIPT: Ed25519 ix uses cross-ix references (sig {}, pk {}, msg {}); rejecting",
+            sig_ix_index,
+            pk_ix_index,
+            msg_ix_index
+        );
+        return Ok(());
+    }
+
+    let pubkey_offset = u16::from_le_bytes([
+        data[ED25519_PUBKEY_OFFSET_OFFSET],
+        data[ED25519_PUBKEY_OFFSET_OFFSET + 1],
+    ]) as usize;
+    let message_offset = u16::from_le_bytes([
+        data[ED25519_MSG_OFFSET_OFFSET],
+        data[ED25519_MSG_OFFSET_OFFSET + 1],
+    ]) as usize;
+    let message_size = u16::from_le_bytes([
+        data[ED25519_MSG_SIZE_OFFSET],
+        data[ED25519_MSG_SIZE_OFFSET + 1],
+    ]) as usize;
+
+    if pubkey_offset + 32 > data.len() || message_offset + message_size > data.len() {
+        msg!("RECEIPT: Ed25519 ix offsets exceed data length");
+        return Ok(());
+    }
+    if message_size != RECEIPT_MESSAGE_LEN {
+        msg!(
+            "RECEIPT: message size {} != expected {}",
+            message_size,
+            RECEIPT_MESSAGE_LEN
+        );
+        return Ok(());
+    }
+
+    let signed_pubkey = &data[pubkey_offset..pubkey_offset + 32];
+    if signed_pubkey != validator_pubkey {
+        msg!("RECEIPT: signing pubkey does not match ProtocolConfig.validator_pubkey");
+        return Ok(());
+    }
+
+    let message = &data[message_offset..message_offset + RECEIPT_MESSAGE_LEN];
+    let receipt_wallet = &message[0..32];
+    let receipt_commitment = &message[32..64];
+    let validated_at_bytes: [u8; 8] = message[64..72]
+        .try_into()
+        .expect("slice of 8 bytes is always convertible to [u8; 8]");
+    let validated_at = i64::from_le_bytes(validated_at_bytes);
+
+    if receipt_wallet != expected_wallet.as_ref() {
+        msg!("RECEIPT: wallet mismatch");
+        return Ok(());
+    }
+    if receipt_commitment != expected_commitment {
+        msg!("RECEIPT: commitment mismatch");
+        return Ok(());
+    }
+    if validated_at > now {
+        msg!("RECEIPT: validated_at is in the future");
+        return Ok(());
+    }
+    if now - validated_at > MAX_RECEIPT_AGE_SECS {
+        msg!("RECEIPT: aged past MAX_RECEIPT_AGE_SECS");
+        return Ok(());
+    }
+
+    msg!("RECEIPT: valid binding for mint_anchor (Phase 3 log-only)");
+    Ok(())
 }
 
 /// Mint account space for Token-2022 with NonTransferable extension.
@@ -229,7 +431,30 @@ pub mod entros_anchor {
         } else {
             0
         };
+        // Read the validator pubkey for mint receipt binding (master-list
+        // #146 Phase 3). Pre-migration ProtocolConfig (77 bytes, before
+        // entros-registry::set_validator_pubkey ran) trips the length
+        // guard and writes a zero pubkey, which the verify helper treats
+        // as "not yet configured" and skips the check entirely.
+        let mut validator_pubkey = [0u8; 32];
+        if config_data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
+            validator_pubkey.copy_from_slice(
+                &config_data[PC_OFFSET_VALIDATOR_PUBKEY..PC_OFFSET_VALIDATOR_PUBKEY + 32],
+            );
+        }
         drop(config_data);
+
+        // Phase 3: log-only receipt binding. Result is informational —
+        // every check failure logs and proceeds. Phase 5 will swap each
+        // `msg!` for a `return Err(...)` to begin enforcement.
+        let now = Clock::get()?.unix_timestamp;
+        verify_mint_receipt(
+            &ctx.accounts.instructions_sysvar,
+            &validator_pubkey,
+            &ctx.accounts.user.key(),
+            &initial_commitment,
+            now,
+        )?;
 
         // Transfer verification fee from user to protocol treasury
         if verification_fee > 0 {
@@ -1022,6 +1247,15 @@ pub struct MintAnchor<'info> {
         seeds::program = REGISTRY_PROGRAM_ID,
     )]
     pub treasury: UncheckedAccount<'info>,
+
+    /// CHECK: Solana Instructions sysvar. Read-only access used by mint
+    /// receipt verification (master-list #146 Phase 3) to inspect the
+    /// preceding Ed25519Program::verify instruction in the same tx.
+    /// Address is constrained to the canonical sysvar pubkey, so the
+    /// program is guaranteed to be reading the real sysvar regardless of
+    /// what the client passes.
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::id())]
+    pub instructions_sysvar: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

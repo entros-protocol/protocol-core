@@ -20,4 +20,6 @@ pub enum RegistryError {
     WrongUpgradeAuthority,
     #[msg("Protocol config bytes malformed")]
     InvalidProtocolConfig,
+    #[msg("Validator pubkey must be non-zero (zero pubkey would silently disable receipt binding)")]
+    InvalidValidatorPubkey,
 }

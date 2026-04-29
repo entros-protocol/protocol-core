@@ -73,6 +73,35 @@ pub mod entros_registry {
         Ok(())
     }
 
+    /// Set the validator signing pubkey used for mint receipt binding
+    /// (master-list #146 Phase 3). Admin-only. The same Anchor realloc
+    /// constraint resizes the account from the legacy 77-byte layout to
+    /// the new 109-byte layout in one call when first run on devnet.
+    /// Subsequent calls are rotation: same length, new pubkey.
+    ///
+    /// Zero pubkey is rejected — entros-anchor treats a zero pubkey as
+    /// "receipts not yet configured" and skips the on-chain check, so
+    /// writing zero would silently disable the binding rather than rotate.
+    pub fn set_validator_pubkey(
+        ctx: Context<SetValidatorPubkey>,
+        validator_pubkey: Pubkey,
+    ) -> Result<()> {
+        require!(
+            validator_pubkey != Pubkey::default(),
+            RegistryError::InvalidValidatorPubkey
+        );
+
+        let config = &mut ctx.accounts.protocol_config;
+        config.validator_pubkey = validator_pubkey;
+
+        emit!(ValidatorPubkeySet {
+            admin: ctx.accounts.admin.key(),
+            validator_pubkey,
+        });
+
+        Ok(())
+    }
+
     /// Withdraw accumulated fees from the protocol treasury.
     /// Admin-only. Preserves rent-exempt minimum balance.
     pub fn withdraw_treasury(ctx: Context<WithdrawTreasury>, amount: u64) -> Result<()> {
@@ -386,6 +415,31 @@ pub struct UpdateProtocolConfig<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetValidatorPubkey<'info> {
+    #[account(
+        mut,
+        constraint = protocol_config.admin == admin.key() @ RegistryError::Unauthorized
+    )]
+    pub admin: Signer<'info>,
+
+    /// Anchor realloc resizes the account from the legacy 77-byte layout
+    /// to the new 109-byte layout the first time this instruction runs
+    /// against an existing devnet ProtocolConfig. Subsequent calls
+    /// (rotation) realloc is a no-op — same length on both sides.
+    #[account(
+        mut,
+        realloc = ProtocolConfig::LEN,
+        realloc::payer = admin,
+        realloc::zero = false,
+        seeds = [b"protocol_config"],
+        bump = protocol_config.bump,
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct WithdrawTreasury<'info> {
     #[account(
         mut,
@@ -512,4 +566,10 @@ pub struct TreasuryWithdrawn {
 pub struct AdminMigrated {
     pub old_admin: Pubkey,
     pub new_admin: Pubkey,
+}
+
+#[event]
+pub struct ValidatorPubkeySet {
+    pub admin: Pubkey,
+    pub validator_pubkey: Pubkey,
 }

@@ -32,4 +32,18 @@ pub enum EntrosAnchorError {
     UnauthorizedNewWallet,
     #[msg("VerificationResult.verified_at is in the future relative to the cluster clock")]
     ProofFromFuture,
+    #[msg("mint_anchor expected a preceding Ed25519Program::verify instruction with a validator-signed receipt; none found")]
+    MissingValidatorReceipt,
+    #[msg("Receipt was signed by a key that does not match ProtocolConfig.validator_pubkey")]
+    ReceiptValidatorMismatch,
+    #[msg("Receipt commitment does not match the mint_anchor commitment argument")]
+    ReceiptCommitmentMismatch,
+    #[msg("Receipt wallet does not match the mint signer")]
+    ReceiptWalletMismatch,
+    #[msg("Receipt has aged past MAX_RECEIPT_AGE_SECS")]
+    ReceiptExpired,
+    #[msg("Receipt validated_at is in the future relative to the cluster clock")]
+    ReceiptFromFuture,
+    #[msg("Receipt message has malformed length or layout")]
+    MalformedReceiptMessage,
 }

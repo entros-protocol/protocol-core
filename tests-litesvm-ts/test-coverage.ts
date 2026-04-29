@@ -3,7 +3,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
-import type { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
 import {
   anchorAddr,
@@ -48,6 +48,7 @@ import {
   registerValidator,
   sendSol,
   setProgramDataAcct,
+  setValidatorPubkey,
   updateAnchor,
   updateProtocolConfig,
   user1,
@@ -405,6 +406,51 @@ test("registry.updateProtocolConfig() with verification fee", async () => {
   expect(config.base_trust_increment).eq(BASE_TRUST_INCREMENT);
   expect(config.bump).eq(protocolConfigBump);
   expect(config.verification_fee).eq(verification_fee);
+});
+
+test("registry.setValidatorPubkey() should fail with zero pubkey", async () => {
+  console.log(
+    "\n----------------== registry.setValidatorPubkey() should fail with zero pubkey",
+  );
+  // master-list #146 Phase 3: zero pubkey would silently disable the
+  // mint receipt check (entros-anchor treats it as 'not yet configured'),
+  // so the registry refuses to write it. Forces operators to use a real
+  // signing key for rotation.
+  expectedErr =
+    "Error Number: 6009. Error Message: Validator pubkey must be non-zero";
+  setValidatorPubkey(adminKp, PublicKey.default, protocolConfigPda, expectedErr);
+});
+
+test("registry.setValidatorPubkey() should fail by non-admin", async () => {
+  console.log(
+    "\n----------------== registry.setValidatorPubkey() should fail by non-admin",
+  );
+  expectedErr =
+    "Error Code: Unauthorized. Error Number: 6003. Error Message: Unauthorized: caller is not the expected authority.";
+  // Use a fresh non-admin keypair (user1Kp) — admin constraint should reject.
+  const fakeValidator = Keypair.generate().publicKey;
+  setValidatorPubkey(user1Kp, fakeValidator, protocolConfigPda, expectedErr);
+});
+
+test("registry.setValidatorPubkey()", async () => {
+  console.log("\n----------------== registry.setValidatorPubkey()");
+  // First call: writes the validator pubkey (no realloc needed since
+  // ProtocolConfig was initialized at the new 109-byte length earlier
+  // in this test sequence — the realloc path is exercised in the live
+  // devnet migration when an existing 77-byte account is upgraded).
+  const validator = Keypair.generate().publicKey;
+  setValidatorPubkey(adminKp, validator, protocolConfigPda);
+
+  rawAccData = readAcct(protocolConfigPda, registryAddr);
+  const config = decodeProtocolConfigDev(rawAccData);
+  acctEqual(config.validator_pubkey, validator);
+
+  // Rotation: set a different pubkey, confirm it overwrites.
+  const validator2 = Keypair.generate().publicKey;
+  setValidatorPubkey(adminKp, validator2, protocolConfigPda);
+  rawAccData = readAcct(protocolConfigPda, registryAddr);
+  const configRotated = decodeProtocolConfigDev(rawAccData);
+  acctEqual(configRotated.validator_pubkey, validator2);
 });
 
 test("registry.registerValidator() with insufficient SOL", async () => {

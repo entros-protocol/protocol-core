@@ -49,6 +49,13 @@ export const verifierAddr = new PublicKey(
 );
 console.log("verifierAddr:", verifierAddr.toBase58());
 export const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
+/// Solana Instructions sysvar — read-only account that exposes the
+/// transaction's instruction list to on-chain programs. mint_anchor
+/// (master-list #146 Phase 3) reads it to verify a preceding
+/// Ed25519Program::verify mint receipt.
+export const INSTRUCTIONS_SYSVAR = new PublicKey(
+  "Sysvar1nstructions1111111111111111111111111",
+);
 export const BPFLoaderUpgradeab1e = new PublicKey(
   "BPFLoaderUpgradeab1e11111111111111111111111",
 );
@@ -269,6 +276,7 @@ export type ProtocolConfigAcct = {
   bump: number;
   verification_fee: bigint;
   migration_fee: bigint;
+  validator_pubkey: Address;
 }; //padding: bigint[];
 export const protocolconfigAcctDecoder: FixedSizeDecoder<ProtocolConfigAcct> =
   getStructDecoder([
@@ -281,6 +289,11 @@ export const protocolconfigAcctDecoder: FixedSizeDecoder<ProtocolConfigAcct> =
     ["bump", getU8Decoder()],
     ["verification_fee", getU64Decoder()],
     ["migration_fee", getU64Decoder()],
+    // master-list #146 Phase 3: validator_pubkey appended at offset 77
+    // (Pubkey is 32 bytes, same encoding as Address). Pre-migration
+    // accounts (77 bytes total) won't decode through this decoder —
+    // post-migration accounts are 109 bytes.
+    ["validator_pubkey", getAddressDecoder()],
     //["padding", getArrayDecoder(getU64Decoder(), { size: 3 })],
   ]);
 export const decodeProtocolConfig = (
@@ -297,6 +310,7 @@ export const decodeProtocolConfig = (
     console.log("bump:", decoded.bump);
     console.log("verification_fee:", decoded.verification_fee);
     console.log("migration_fee:", decoded.migration_fee);
+    console.log("validator_pubkey:", decoded.validator_pubkey);
   }
   return decoded;
 };
@@ -315,6 +329,7 @@ export const decodeProtocolConfigDev = (
     bump: decoded.bump,
     verification_fee: decoded.verification_fee,
     migration_fee: decoded.migration_fee,
+    validator_pubkey: new PublicKey(decoded.validator_pubkey.toString()),
   };
   return decodedV1;
 };
@@ -327,6 +342,7 @@ export type ProtocolConfigAcctDev = {
   bump: number;
   verification_fee: bigint;
   migration_fee: bigint;
+  validator_pubkey: PublicKey;
 };
 
 //-------------== Encode numbers

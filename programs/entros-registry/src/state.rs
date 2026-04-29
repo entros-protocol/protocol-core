@@ -17,6 +17,13 @@ pub struct ProtocolConfig {
     /// Lamports charged per verification (user-pays model)
     pub verification_fee: u64,
     pub migration_fee: u64,
+    /// Public key the off-chain validator service uses to sign mint receipts
+    /// (master-list #146). entros-anchor::mint_anchor verifies an
+    /// Ed25519Program::verify instruction in the same transaction was signed
+    /// against this key. Set via `set_validator_pubkey` (admin-only); zero
+    /// pubkey means "receipts not yet configured" — entros-anchor treats
+    /// that as pre-migration and skips the check.
+    pub validator_pubkey: Pubkey,
 }
 
 impl ProtocolConfig {
@@ -28,7 +35,11 @@ impl ProtocolConfig {
         + 2   // base_trust_increment
         + 1   // bump
         + 8   // verification_fee
-        + 8;  // migration_fee
+        + 8   // migration_fee
+        + 32; // validator_pubkey
+    /// Byte offset of `validator_pubkey` in the serialised account.
+    /// Used by entros-anchor for raw-byte reads (master-list #146).
+    pub const OFFSET_VALIDATOR_PUBKEY: usize = 77;
 }
 
 #[account]
