@@ -3,10 +3,15 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token_2022::{self, burn, Burn, spl_token_2022, Approve, close_account, CloseAccount};
-use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
-use spl_token_2022::extension::ExtensionType;
+use anchor_spl::token_2022::{
+    self, burn, close_account, spl_token_2022, Approve, Burn, CloseAccount,
+};
+use anchor_spl::token_interface::{
+    spl_token_metadata_interface::state::TokenMetadata, token_metadata_initialize, Mint,
+    TokenAccount, TokenInterface, TokenMetadataInitialize,
+};
 use solana_security_txt::security_txt;
+use spl_token_2022::extension::ExtensionType;
 
 mod errors;
 mod state;
@@ -27,15 +32,15 @@ security_txt! {
 /// entros-registry program ID for cross-program ProtocolConfig PDA validation.
 /// Decoded from: 6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    81, 130, 250, 230, 30, 253, 246, 69, 82, 96, 7, 173, 78, 160, 131, 188, 70, 106, 173, 59,
-    102, 163, 198, 189, 82, 37, 225, 38, 52, 233, 157, 117,
+    81, 130, 250, 230, 30, 253, 246, 69, 82, 96, 7, 173, 78, 160, 131, 188, 70, 106, 173, 59, 102,
+    163, 198, 189, 82, 37, 225, 38, 52, 233, 157, 117,
 ]);
 
 /// entros-verifier program ID for cross-program VerificationResult PDA validation.
 /// Decoded from: 4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV
 const VERIFIER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    48, 50, 94, 115, 90, 162, 108, 8, 240, 151, 76, 223, 101, 176, 170, 86, 254, 247, 252, 28,
-    240, 145, 60, 108, 42, 129, 105, 32, 232, 212, 226, 52,
+    48, 50, 94, 115, 90, 162, 108, 8, 240, 151, 76, 223, 101, 176, 170, 86, 254, 247, 252, 28, 240,
+    145, 60, 108, 42, 129, 105, 32, 232, 212, 226, 52,
 ]);
 
 /// Maximum age of a VerificationResult consumed by update_anchor, in seconds.
@@ -186,7 +191,10 @@ fn verify_mint_receipt(
     // payloads follow at the offsets the header declares.
     let data = &prev.data;
     if data.len() < ED25519_HEADER_LEN {
-        msg!("RECEIPT: malformed Ed25519 ix header (length {})", data.len());
+        msg!(
+            "RECEIPT: malformed Ed25519 ix header (length {})",
+            data.len()
+        );
         return Err(EntrosAnchorError::MalformedReceiptMessage.into());
     }
     if data[ED25519_NUM_SIG_OFFSET] != 1 {
@@ -295,6 +303,9 @@ fn verify_mint_receipt(
 /// NonTransferable data = 0 bytes. Plus multisig padding from Token-2022.
 /// We use a constant derived from the Token-2022 spec.
 //const MINT_SIZE_WITH_NON_TRANSFERABLE: usize = 170;
+const MINT_NAME: &str = "Entros Anchor";
+const MINT_SYMBOL: &str = "ANCHOR";
+const MINT_URI: &str = "https://entros.io/anchor-metadata.json";
 
 #[program]
 pub mod entros_anchor {
@@ -313,18 +324,29 @@ pub mod entros_anchor {
         let mint_seeds: &[&[u8]] = &[b"mint", user_key.as_ref(), &[ctx.bumps.mint]];
         let mint_authority_seeds: &[&[u8]] = &[b"mint_authority", &[ctx.bumps.mint_authority]];
 
+        let token_metadata = TokenMetadata {
+            name: MINT_NAME.to_string(),
+            symbol: MINT_SYMBOL.to_string(),
+            uri: MINT_URI.to_string(),
+            ..Default::default()
+        };
+        let meta_data_space = token_metadata.tlv_size_of()?;
+
         let extensions = [
-          ExtensionType::NonTransferable,
-          ExtensionType::MintCloseAuthority,
+            ExtensionType::NonTransferable,
+            ExtensionType::MintCloseAuthority,
+            ExtensionType::MetadataPointer,
         ];
-        // 2. Calculate Space
-        let space = ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&extensions)?;
-    
+        // 0. Calculate Space
+        let space =
+            ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&extensions)?;
+
         // 1. Allocate mint account with space for NonTransferable extension
         let rent = Rent::get()?;
-        let lamports = rent.minimum_balance(space);
+        let lamports = rent.minimum_balance(space + meta_data_space);
+
         #[cfg(feature = "debug-logs")]
-        msg!("create_account");
+        msg!("create_account on mint");
         system_program::create_account(
             CpiContext::new_with_signer(
                 ctx.accounts.system_program.to_account_info(),
@@ -356,10 +378,20 @@ pub mod entros_anchor {
             Some(&ctx.accounts.mint_authority.key()),
         )?;
         anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
-        
+
+        #[cfg(feature = "debug-logs")]
+        msg!("initialize metadata_pointer");
+        let ix = spl_token_2022::extension::metadata_pointer::instruction::initialize(
+            ctx.accounts.token_program.key,
+            &ctx.accounts.mint.key(),
+            Some(ctx.accounts.mint_authority.key()),
+            Some(ctx.accounts.mint.key()),
+        )?;
+        anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
+
         // 3. Initialize the mint (decimals=0, authority=mint_authority PDA)
         #[cfg(feature = "debug-logs")]
-        msg!("initialize_mint");
+        msg!("initialize_mint2");
         let ix = spl_token_2022::instruction::initialize_mint2(
             ctx.accounts.token_program.key,
             &ctx.accounts.mint.key(),
@@ -368,6 +400,26 @@ pub mod entros_anchor {
             0,    // decimals
         )?;
         anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
+
+        // initialize the metadata after  initializing the Mint account
+        #[cfg(feature = "debug-logs")]
+        msg!("token_metadata_initialize");
+        token_metadata_initialize(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TokenMetadataInitialize {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    program_id: ctx.accounts.token_program.to_account_info(),
+                    mint_authority: ctx.accounts.mint_authority.to_account_info(),
+                    update_authority: ctx.accounts.mint_authority.to_account_info(),
+                    metadata: ctx.accounts.mint.to_account_info(),
+                },
+                &[mint_authority_seeds],
+            ),
+            MINT_NAME.to_string(),
+            MINT_SYMBOL.to_string(),
+            MINT_URI.to_string(),
+        )?;
 
         // 4. Create the user's Associated Token Account
         #[cfg(feature = "debug-logs")]
@@ -426,8 +478,14 @@ pub mod entros_anchor {
         let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
         let verification_fee = if config_data.len() >= 69 {
             u64::from_le_bytes([
-                config_data[61], config_data[62], config_data[63], config_data[64],
-                config_data[65], config_data[66], config_data[67], config_data[68],
+                config_data[61],
+                config_data[62],
+                config_data[63],
+                config_data[64],
+                config_data[65],
+                config_data[66],
+                config_data[67],
+                config_data[68],
             ])
         } else {
             0
@@ -503,19 +561,29 @@ pub mod entros_anchor {
         let mint_seeds: &[&[u8]] = &[b"mint", user_key.as_ref(), &[ctx.bumps.mint]];
         let mint_authority_seeds: &[&[u8]] = &[b"mint_authority", &[ctx.bumps.mint_authority]];
 
+        let token_metadata = TokenMetadata {
+            name: MINT_NAME.to_string(),
+            symbol: MINT_SYMBOL.to_string(),
+            uri: MINT_URI.to_string(),
+            ..Default::default()
+        };
+        let meta_data_space = token_metadata.tlv_size_of()?;
+
         let extensions = [
-          ExtensionType::NonTransferable,
-          ExtensionType::MintCloseAuthority,
+            ExtensionType::NonTransferable,
+            ExtensionType::MintCloseAuthority,
+            ExtensionType::MetadataPointer,
         ];
-        // 2. Calculate Space
-        let space = ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&extensions)?;
-        
+        // 0. Calculate Space
+        let space =
+            ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&extensions)?;
+
         // 1. Allocate mint account with space for NonTransferable extension
         let rent = Rent::get()?;
-        let lamports = rent.minimum_balance(space);
+        let lamports = rent.minimum_balance(space + meta_data_space);
 
         #[cfg(feature = "debug-logs")]
-        msg!("create_account");
+        msg!("create_account on mint");
         system_program::create_account(
             CpiContext::new_with_signer(
                 ctx.accounts.system_program.to_account_info(),
@@ -532,13 +600,13 @@ pub mod entros_anchor {
 
         // 2. Initialize NonTransferable extension (MUST be before InitializeMint2)
         #[cfg(feature = "debug-logs")]
-        msg!("initialize_non_transferable");
+        msg!("initialize_non_transferable_mint");
         let ix = spl_token_2022::instruction::initialize_non_transferable_mint(
             ctx.accounts.token_program.key,
             &ctx.accounts.mint.key(),
         )?;
         anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
-        
+
         #[cfg(feature = "debug-logs")]
         msg!("initialize_close_authority");
         let ix = spl_token_2022::instruction::initialize_mint_close_authority(
@@ -547,10 +615,20 @@ pub mod entros_anchor {
             Some(&ctx.accounts.mint_authority.key()),
         )?;
         anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
-        
+
+        #[cfg(feature = "debug-logs")]
+        msg!("initialize metadata_pointer");
+        let ix = spl_token_2022::extension::metadata_pointer::instruction::initialize(
+            ctx.accounts.token_program.key,
+            &ctx.accounts.mint.key(),
+            Some(ctx.accounts.mint_authority.key()),
+            Some(ctx.accounts.mint.key()),
+        )?;
+        anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
+
         // 3. Initialize the mint (decimals=0, authority=mint_authority PDA)
         #[cfg(feature = "debug-logs")]
-        msg!("initialize_mint");
+        msg!("initialize_mint2");
         let ix = spl_token_2022::instruction::initialize_mint2(
             ctx.accounts.token_program.key,
             &ctx.accounts.mint.key(),
@@ -560,7 +638,29 @@ pub mod entros_anchor {
         )?;
         anchor_lang::solana_program::program::invoke(&ix, &[ctx.accounts.mint.to_account_info()])?;
 
+        // initialize the metadata after  initializing the Mint account
+        #[cfg(feature = "debug-logs")]
+        msg!("token_metadata_initialize");
+        token_metadata_initialize(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TokenMetadataInitialize {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    program_id: ctx.accounts.token_program.to_account_info(),
+                    mint_authority: ctx.accounts.mint_authority.to_account_info(),
+                    update_authority: ctx.accounts.mint_authority.to_account_info(),
+                    metadata: ctx.accounts.mint.to_account_info(),
+                },
+                &[mint_authority_seeds],
+            ),
+            MINT_NAME.to_string(),
+            MINT_SYMBOL.to_string(),
+            MINT_URI.to_string(),
+        )?;
+
         // 4. Create the user's Associated Token Account
+        #[cfg(feature = "debug-logs")]
+        msg!("create user ata");
         anchor_spl::associated_token::create(CpiContext::new(
             ctx.accounts.associated_token_program.to_account_info(),
             anchor_spl::associated_token::Create {
@@ -574,6 +674,8 @@ pub mod entros_anchor {
         ))?;
 
         // 5. Mint exactly 1 token to the user's ATA
+        #[cfg(feature = "debug-logs")]
+        msg!("mint 1 token");
         token_2022::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -586,8 +688,10 @@ pub mod entros_anchor {
             ),
             1,
         )?;
-        
+
         // 6. Migrate Identity
+        #[cfg(feature = "debug-logs")]
+        msg!("Migrate Identity");
         let identity = &mut ctx.accounts.identity_state;
         let identity_old = &ctx.accounts.identity_state_old;
         require!(
@@ -615,8 +719,14 @@ pub mod entros_anchor {
         let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
         let migration_fee = if config_data.len() >= 77 {
             u64::from_le_bytes([
-                config_data[69], config_data[70], config_data[71], config_data[72],
-                config_data[73], config_data[74], config_data[75], config_data[76],
+                config_data[69],
+                config_data[70],
+                config_data[71],
+                config_data[72],
+                config_data[73],
+                config_data[74],
+                config_data[75],
+                config_data[76],
             ])
         } else {
             0
@@ -646,7 +756,7 @@ pub mod entros_anchor {
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
         burn(cpi_ctx, 1)?;
-        
+
         #[cfg(feature = "debug-logs")]
         msg!("Close the old mint account");
         close_account(CpiContext::new_with_signer(
@@ -665,8 +775,8 @@ pub mod entros_anchor {
             identity_old: ctx.accounts.identity_state_old.key(),
             identity_new: ctx.accounts.identity_state.key(),
         });
-          Ok(())
-      }
+        Ok(())
+    }
     /// Update the identity state after a successful proof verification.
     ///
     /// Trust score is computed automatically from verification history and protocol config.
@@ -775,8 +885,7 @@ pub mod entros_anchor {
             vr_data[0..8] == VERIFICATION_RESULT_DISCRIMINATOR,
             EntrosAnchorError::StaleVerificationResult
         );
-        let verifier_pk_bytes: [u8; 32] = vr_data
-            [VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
+        let verifier_pk_bytes: [u8; 32] = vr_data[VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
             .try_into()
             .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
         let verifier_pk = Pubkey::new_from_array(verifier_pk_bytes);
@@ -784,8 +893,7 @@ pub mod entros_anchor {
             verifier_pk == ctx.accounts.authority.key(),
             EntrosAnchorError::VerifierMismatch
         );
-        let verified_at_bytes: [u8; 8] = vr_data
-            [VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
+        let verified_at_bytes: [u8; 8] = vr_data[VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
             .try_into()
             .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
         let verified_at = i64::from_le_bytes(verified_at_bytes);
@@ -842,8 +950,14 @@ pub mod entros_anchor {
         let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
         let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
         let verification_fee = u64::from_le_bytes([
-            config_data[61], config_data[62], config_data[63], config_data[64],
-            config_data[65], config_data[66], config_data[67], config_data[68],
+            config_data[61],
+            config_data[62],
+            config_data[63],
+            config_data[64],
+            config_data[65],
+            config_data[66],
+            config_data[67],
+            config_data[68],
         ]);
         drop(config_data);
 
@@ -877,9 +991,7 @@ pub mod entros_anchor {
         // recent_timestamps is shifted newest-first in update_anchor, so
         // unique_ts inherits that order. The gap loop below relies on it to
         // produce non-negative day counts.
-        debug_assert!(
-            unique_ts[..unique_count].windows(2).all(|w| w[0] >= w[1]),
-        );
+        debug_assert!(unique_ts[..unique_count].windows(2).all(|w| w[0] >= w[1]),);
 
         // Recency-weighted score from unique verification days
         let mut recency_score: u64 = 0;
@@ -926,7 +1038,8 @@ pub mod entros_anchor {
 
         // Serialize identity state back to account
         let mut data = identity_info.try_borrow_mut_data()?;
-        identity.try_serialize(&mut *data)
+        identity
+            .try_serialize(&mut *data)
             .map_err(|_| error!(EntrosAnchorError::IdentitySerializationFailed))?;
         drop(data);
 
@@ -1049,8 +1162,14 @@ pub mod entros_anchor {
             let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
             if config_data.len() >= 69 {
                 u64::from_le_bytes([
-                    config_data[61], config_data[62], config_data[63], config_data[64],
-                    config_data[65], config_data[66], config_data[67], config_data[68],
+                    config_data[61],
+                    config_data[62],
+                    config_data[63],
+                    config_data[64],
+                    config_data[65],
+                    config_data[66],
+                    config_data[67],
+                    config_data[68],
                 ])
             } else {
                 0
@@ -1065,7 +1184,8 @@ pub mod entros_anchor {
         identity.last_reset_timestamp = now;
 
         let mut data = identity_info.try_borrow_mut_data()?;
-        identity.try_serialize(&mut *data)
+        identity
+            .try_serialize(&mut *data)
             .map_err(|_| error!(EntrosAnchorError::IdentitySerializationFailed))?;
         drop(data);
 
@@ -1192,8 +1312,8 @@ pub struct MigrateIdentity<'info> {
         associated_token::mint = mint_old,
         associated_token::authority = wallet_old,
         associated_token::token_program = token_program)]
-    pub token_account_old: InterfaceAccount<'info, TokenAccount>,    
-  }
+    pub token_account_old: InterfaceAccount<'info, TokenAccount>,
+}
 #[derive(Accounts)]
 pub struct MintAnchor<'info> {
     #[account(mut)]

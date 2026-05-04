@@ -6,10 +6,10 @@ Measured via `sol_log_compute_units()` on localnet with `anchor test`. Default l
 
 | Instruction | CU Consumed | Headroom | Notes |
 |-------------|-------------|----------|-------|
-| mint_anchor | 46,539 - 58,539 | ~142K - 154K | Range from Token-2022 account creation variance |
+| mint_anchor | 79.5K | 120K | Range from Token-2022 account creation variance |
 | update_anchor | 6,778 | ~193K | Includes trust score computation + timestamp update |
 | authorize_new_wallet | 15,485 | 185K | Included operations: add new signer in IdentityPDA, approve token delegate |
-| migrate_identity | 73,669 - 87,169 | 113K - 126K | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
+| migrate_identity | 98.8K | 101K | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
 
 ## entros-registry
 

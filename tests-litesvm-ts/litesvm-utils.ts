@@ -19,11 +19,12 @@ import {
 } from "litesvm";
 import {
   anchorAddr,
+  decodeMetaData,
   getPdas,
+  INSTRUCTIONS_SYSVAR,
   loadProofFixture,
   numToBytes,
   registryAddr,
-  INSTRUCTIONS_SYSVAR,
   SYSTEM_PROGRAM,
   verifierAddr,
 } from "./encodeDecode.ts";
@@ -116,6 +117,39 @@ export const readAcct = (acct1: PublicKey, acctOwner?: PublicKey) => {
   console.log("pdaRaw?.owner:", pdaRaw?.owner.toBase58());
   if (acctOwner) acctEqual(pdaRaw?.owner, acctOwner);
   return rawAccountData;
+};
+
+export const readAnchorMintAcct = (
+  anchorMint: PublicKey,
+  _acctOwner?: PublicKey,
+) => {
+  const data = readAcct(anchorMint);
+  console.log("AnchorMint account length:", data?.length);
+  const metadataIndex = 342;
+  //3x4 bytes for data length of name(min 2 bytes), symbol(min 3 bytes), uri length(min 3 bytes) + 4 bytes last padding;
+  const metadataLen = 415; // fixed length from fixed AnchorMint name, symbol, and uri
+  if (data && data?.length !== metadataLen) {
+    throw new Error("metadataLen invalid");
+  }
+  const _mintAuthority = data?.slice(4, 36);
+  //const part1 = data?.slice(36, 86);
+  //const last50bytes = data?.slice(-50);
+  const index = metadataIndex;
+
+  const { value: tokenName, index: indexNew1 } = decodeMetaData(
+    data,
+    index,
+    "TokenName",
+    true,
+  );
+  const { value: symbol, index: indexNew2 } = decodeMetaData(
+    data,
+    indexNew1,
+    "URI",
+    true,
+  );
+  //strToU8Array("token_uri", true);
+  const { value: uri } = decodeMetaData(data, indexNew2, "URI", true);
 };
 export const balcSol = (
   target: PublicKey,
@@ -797,7 +831,7 @@ export const checkLogs = (
       "find error here: https://docs.rs/solana-sdk/latest/solana_sdk/transaction/enum.TransactionError.html",
     );
     if (expectedError) {
-      const foundErrorMesg = sendRes.toString().includes(`${expectedError}`);
+      const foundErrorMesg = errStr.includes(`${expectedError}`);
       console.log("found error?:", foundErrorMesg);
       expect(foundErrorMesg).eq(true);
     } else {

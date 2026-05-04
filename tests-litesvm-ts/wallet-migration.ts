@@ -39,6 +39,7 @@ import {
   mintAnchor,
   pdasBySignerKp,
   readAcct,
+  readAnchorMintAcct,
   setTime,
   user1,
   user1Kp,
@@ -211,4 +212,5 @@ test("entrosAnchor.migrateIdentity() by user1", async () => {
   console.log("migrateAuthority 8");
   balcAtaCk(pdasAdmin.ata, zero, "Mint_Old", 0);
   acctIsNull(pdasAdmin.mintPda);
+  readAnchorMintAcct(pdas.mintPda);
 });
