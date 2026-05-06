@@ -105,5 +105,8 @@ test("entrosAnchor.mintAnchor()", async () => {
   acctEqual(identity.mint, pdas.mintPda);
   balcAtaCk(pdas.ata, BigInt(1), "IdentityMint", 0);
   console.log("mintAuthority:", mintAuthorityPda.toBytes());
-  readAnchorMintAcct(pdas.mintPda);
+  const { tokenName, tokenSymbol, tokenURI } = readAnchorMintAcct(pdas.mintPda);
+  expect(tokenName).eq("Entros Anchor");
+  expect(tokenSymbol).eq("ANCHOR");
+  expect(tokenURI).eq("https://entros.io/anchor-metadata.json");
 });

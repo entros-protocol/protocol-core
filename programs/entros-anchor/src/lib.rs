@@ -340,6 +340,8 @@ pub mod entros_anchor {
         // 0. Calculate Space
         let space =
             ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&extensions)?;
+        #[cfg(feature = "debug-logs")]
+        msg!("space: {:?}", space); // 274
 
         // 1. Allocate mint account with space for NonTransferable extension
         let rent = Rent::get()?;
@@ -569,7 +571,7 @@ pub mod entros_anchor {
         };
         let meta_data_space = token_metadata.tlv_size_of()?;
 
-        let extensions = [
+        let extensions: [ExtensionType; 3] = [
             ExtensionType::NonTransferable,
             ExtensionType::MintCloseAuthority,
             ExtensionType::MetadataPointer,
@@ -577,6 +579,8 @@ pub mod entros_anchor {
         // 0. Calculate Space
         let space =
             ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&extensions)?;
+        #[cfg(feature = "debug-logs")]
+        msg!("space: {:?}", space); // 274
 
         // 1. Allocate mint account with space for NonTransferable extension
         let rent = Rent::get()?;
