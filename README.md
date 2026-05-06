@@ -4,7 +4,7 @@ Solana on-chain programs for the Entros Protocol. Three Anchor programs handle i
 
 ## Programs
 
-**entros-anchor** — Non-transferable identity token. Creates a Token-2022 mint with the NonTransferable extension, mints one token per user, and manages an IdentityState PDA that tracks verification history and Trust Score.
+**entros-anchor** — Non-transferable identity token. Creates a Token-2022 mint with the NonTransferable extension, mints one token per user, and manages an IdentityState PDA that tracks verification history and Trust Score. Mints require a validator-signed Ed25519 receipt binding the wallet, commitment, and validation timestamp — verified on-chain via the Instructions sysvar.
 
 **entros-verifier** — ZK proof verification. Accepts Groth16 proofs and public inputs, verifies them on-chain via `groth16-solana`, and manages challenge nonces for anti-replay.
 
