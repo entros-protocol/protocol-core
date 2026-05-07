@@ -60,7 +60,7 @@ import {
 /*
 Build the Solana programs first:
 $ anchor build
-Then Install NodeJs v25.9.0(or above v22.18.0) to run this TypeScript Natively: node ./file_path/this_file.ts
+Then Install NodeJs v26.0.0(or above v22.18.0) to run this TypeScript Natively: node ./file_path/this_file.ts
 Or use Bun: bun test ./file_path/this_file.ts
 */
 
@@ -109,7 +109,9 @@ test("ProtocolConfig byte offsets match Borsh layout", async () => {
   // or changes a field type, the IDL deserialization shifts but the raw
   // reads do not — this test fails fast on that drift.
   if (!rawAccData) {
-    throw new Error("rawAccData not initialized — initializeProtocol must run first");
+    throw new Error(
+      "rawAccData not initialized — initializeProtocol must run first",
+    );
   }
   const config = decodeProtocolConfigDev(rawAccData);
   const view = new DataView(
@@ -418,7 +420,12 @@ test("registry.setValidatorPubkey() should fail with zero pubkey", async () => {
   // signing key for rotation.
   expectedErr =
     "Error Number: 6009. Error Message: Validator pubkey must be non-zero";
-  setValidatorPubkey(adminKp, PublicKey.default, protocolConfigPda, expectedErr);
+  setValidatorPubkey(
+    adminKp,
+    PublicKey.default,
+    protocolConfigPda,
+    expectedErr,
+  );
 });
 
 test("registry.setValidatorPubkey() should fail by non-admin", async () => {

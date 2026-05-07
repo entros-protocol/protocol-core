@@ -920,12 +920,12 @@ export const checkLogs = (
       `Program ${programId} success`,
     );
     const computeUnitsConsumed = sendRes.computeUnitsConsumed();
-    const computeUnitsRemained = BigInt(200000) - computeUnitsConsumed;
+    const computeUnitsHeadroom = BigInt(200000) - computeUnitsConsumed;
     console.log(
       "computeUnits Consumed:",
       computeUnitsConsumed,
-      ", Remained:",
-      computeUnitsRemained,
+      ", Headroom:",
+      computeUnitsHeadroom,
     );
     expect(Number(computeUnitsConsumed) <= maxComputeBudget);
   } else {

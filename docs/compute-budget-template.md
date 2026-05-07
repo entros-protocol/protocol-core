@@ -1,0 +1,54 @@
+# Compute Budget
+
+Measured via `sol_log_compute_units()` on localnet with `anchor test`. Default limit is 200,000 CU per instruction. Ranges reflect variance across multiple test runs. Last verified: 2026-05-04.
+
+## entros-anchor
+
+| Instruction | CU Consumed | Headroom | Notes |
+|-------------|-------------|----------|-------|
+| mint_anchor | @mint_anchor | @mint_anchorH | Includes NonTransferable, MintCloseAuthority, MetadataPointer + TokenMetadata extension init |
+| update_anchor | @update_anchor | @update_anchorH | Includes trust score computation + timestamp update |
+| authorize_new_wallet | @authorize_new_wallet | @authorize_new_walletH | Included operations: add new signer in IdentityPDA, approve token delegate |
+| migrate_identity | @migrate_identity | @migrate_identityH | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
+| reset_identity_state | @reset_identity_state | @reset_identity_stateH | |
+
+## entros-registry
+
+| Instruction | CU Consumed | Headroom | Notes |
+|-------------|-------------|----------|-------|
+| initialize_protocol | @initialize_protocol | @initialize_protocolH | One-time admin setup |
+| register_validator | @register_validator | @register_validatorH | Includes SOL stake transfer |
+| compute_trust_score | @compute_trust_score | @compute_trust_scoreH | Pure computation, no state mutation |
+| unstake_validator | @unstake_validator | @unstake_validatorH | Returns staked SOL |
+| update_protocol_config | @update_protocol_config | @update_protocol_configH | Simple field update, may realloc |
+| withdraw_treasury | @withdraw_treasury | @withdraw_treasuryH | SOL transfer from treasury |
+| migrate_admin | @migrate_admin | @migrate_adminH | Simple field update + ProtocolConfig realloc + raw-byte admin write |
+| set_validator_pubkey | @set_validator_pubkey | @set_validator_pubkeyH | |
+
+## entros-verifier
+
+| Instruction | CU Consumed | Headroom | Notes |
+|-------------|-------------|----------|-------|
+| create_challenge | @create_challenge | @create_challengeH | Nonce validation + PDA creation |
+| verify_proof | @verify_proof | @verify_proofH | Groth16 verification (heaviest instruction) |
+| close_challenge | @close_challenge | @close_challengeH | Rent recovery, minimal logic |
+| close_verification_result | @close_verification_result | @close_verification_resultH | Rent recovery, minimal logic |
+
+## Batched Transaction Budget
+
+The wallet-connected verification batches multiple instructions into a single transaction with a 250,000 CU budget request.
+
+**Re-verification** (create_challenge + verify_proof + update_anchor):
+~124K - 134K CU consumed, ~116K - 126K headroom.
+
+**First verification** (create_challenge + verify_proof + mint_anchor):
+~163K - 186K CU consumed, ~64K - 87K headroom.
+
+First verification is the tighter path due to mint_anchor's Token-2022 account creation. Both paths fit within the 250K budget with margin.
+
+## Mainnet Considerations
+
+- verify_proof is the bottleneck at ~110K CU. Solana's default 200K limit accommodates it, but batched transactions need 250K (requested via ComputeBudgetProgram.setComputeUnitLimit).
+- Token-2022 operations in mint_anchor add ~12K CU overhead vs standard SPL Token.
+- Trust score computation in update_anchor scales with the 52-slot timestamp array but stays under 7K CU even at capacity.
+- All instructions well within Solana's 1.4M max requestable CU.
