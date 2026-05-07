@@ -10,7 +10,7 @@ Measured via `sol_log_compute_units()` on localnet with `anchor test`. Default l
 | update_anchor | 6.78K | 193.22K | Includes trust score computation + timestamp update |
 | authorize_new_wallet | 15.48K | 184.51K | Included operations: add new signer in IdentityPDA, approve token delegate |
 | migrate_identity | 98.8K | 101.2K | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
-| reset_identity_state | 15.49K | 184.51K | |
+| reset_identity_state | 15.49K | 184.51K | User-initiated baseline recovery; writes new commitment, zeroes verification history, charges protocol fee, 7-day cooldown enforced. May realloc legacy accounts |
 
 ## entros-registry
 
@@ -23,7 +23,7 @@ Measured via `sol_log_compute_units()` on localnet with `anchor test`. Default l
 | update_protocol_config | 4.51K | 195.49K | Simple field update, may realloc |
 | withdraw_treasury | 7.53K | 192.47K | SOL transfer from treasury |
 | migrate_admin | 11.14K | 188.86K | Simple field update + ProtocolConfig realloc + raw-byte admin write |
-| set_validator_pubkey | 3.33K | 196.67K | |
+| set_validator_pubkey | 3.33K | 196.67K | Admin-only; writes validator signing pubkey to ProtocolConfig (offset 77) used by mint_anchor receipt verification. Realloc 77→109 bytes on first call against legacy account |
 
 ## entros-verifier
 
