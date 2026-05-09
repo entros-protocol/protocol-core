@@ -14,7 +14,7 @@ const isFound = (str: string, target: string) => {
   return str.indexOf(target) > -1;
 };
 console.log("\nfnName, maxComputeUnit");
-let computeUnitHeadroom = 0;
+let headroom = 0;
 let newContent = content;
 for (const [fnName, maxComputeUnit] of Object.entries(maxComputeBudgets)) {
   console.log(fnName, maxComputeUnit);
@@ -22,14 +22,38 @@ for (const [fnName, maxComputeUnit] of Object.entries(maxComputeBudgets)) {
     throw new Error("fnName or fnNameHeadroom not found");
 
   newContent = newContent.replace(`@${fnName}@`, toHumanInt(maxComputeUnit));
+  newContent = newContent.replace(`@${fnName}@`, toHumanInt(maxComputeUnit));
 
-  computeUnitHeadroom = 200000 - maxComputeUnit;
-  newContent = newContent.replace(
-    `@${fnName}H@`,
-    toHumanInt(computeUnitHeadroom),
-  );
+  headroom = 200000 - maxComputeUnit;
+  newContent = newContent.replace(`@${fnName}H@`, toHumanInt(headroom));
 }
-//console.log("content:", newContent.substring(328, 375));
+
+// Re-verification compute budgets
+let maxComputeUnit =
+  maxComputeBudgets.create_challenge +
+  maxComputeBudgets.verify_proof +
+  maxComputeBudgets.update_anchor;
+headroom = 250000 - maxComputeUnit;
+
+newContent = newContent.replace(
+  `@Re-verification@`,
+  toHumanInt(maxComputeUnit),
+);
+newContent = newContent.replace(`@Re-verificationH@`, toHumanInt(headroom));
+
+// FirstVerification compute budgets
+maxComputeUnit =
+  maxComputeBudgets.create_challenge +
+  maxComputeBudgets.verify_proof +
+  maxComputeBudgets.mint_anchor;
+headroom = 250000 - maxComputeUnit;
+
+newContent = newContent.replace(
+  `@First-verification@`,
+  toHumanInt(maxComputeUnit),
+);
+newContent = newContent.replace(`@First-verificationH@`, toHumanInt(headroom));
+
 fs.writeFileSync(computeBudgetOutput, newContent);
 
 console.log(

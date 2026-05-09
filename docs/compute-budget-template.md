@@ -1,8 +1,8 @@
 # Compute Budget
 
-Default limit is 200,000 Compute Units(CU) per instruction.
+Default limit is 200,000 Compute Units (CU) per instruction.
 
-The following CU values are ceilings(maximum expected values) used by the regression suite. Anything ≤ the listed value passes, anything > the listed value fails. Such ceilings are measured by running each of the LiteSVM tests 10 times and pick the maximum measured CU for each of our Solana write functions. Last verified: 2026-05-07.
+The following CU values are ceilings (maximum expected values) used by the regression suite. Anything ≤ the listed value passes, anything > the listed value fails. Such ceilings are measured by running each of the LiteSVM tests 10 times and picking the maximum measured CU for each of our Solana write functions. Last verified: 2026-05-07.
 
 ## entros-anchor
 
@@ -41,16 +41,16 @@ The following CU values are ceilings(maximum expected values) used by the regres
 The wallet-connected verification batches multiple instructions into a single transaction with a 250,000 CU budget request.
 
 **Re-verification** (create_challenge + verify_proof + update_anchor):
-~124K - 134K CU consumed, ~116K - 126K headroom.
+@Re-verification@ CU consumed, @Re-verificationH@ headroom.
 
 **First verification** (create_challenge + verify_proof + mint_anchor):
-~163K - 186K CU consumed, ~64K - 87K headroom.
+@First-verification@ CU consumed, @First-verificationH@ headroom.
 
-First verification is the tighter path due to mint_anchor's Token-2022 account creation. Both paths fit within the 250K budget with margin.
+First verification is the tightest path due to mint_anchor's Token-2022 account creation. Both paths fit within the 250K budget with margin.
 
 ## Mainnet Considerations
 
-- verify_proof is the bottleneck at ~110K CU. Solana's default 200K limit accommodates it, but batched transactions need 250K (requested via ComputeBudgetProgram.setComputeUnitLimit).
-- Token-2022 operations in mint_anchor add ~12K CU overhead vs standard SPL Token.
-- Trust score computation in update_anchor scales with the 52-slot timestamp array but stays under 7K CU even at capacity.
+- verify_proof is the bottleneck at @verify_proof@ CU. Solana's default 200K limit accommodates it, but batched transactions need 250K (requested via ComputeBudgetProgram.setComputeUnitLimit).
+- mint_anchor's Token-2022 extension stack (NonTransferable + MintCloseAuthority + MetadataPointer + TokenMetadata) accounts for the bulk of its @mint_anchor@ CU consumption.
+- update_anchor consumes @update_anchor@ CU, dominated by trust score computation against the 52-slot timestamp array plus mint-receipt binding writes.
 - All instructions well within Solana's 1.4M max requestable CU.
