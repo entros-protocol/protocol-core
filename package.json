@@ -6,7 +6,8 @@
     "test": "anchor test",
     "litesvm-transfer-sol": "node ./tests-litesvm-ts/transfer-sol.ts",
     "litesvm-coverage": "node ./tests-litesvm-ts/test-coverage.ts",
-    "litesvm-trustscore": "node ./tests-litesvm-ts/clock-tests.ts"
+    "litesvm-trustscore": "node ./tests-litesvm-ts/clock-tests.ts",
+    "cu-budget": "node ./scripts/makeComputeBudgetDoc.ts"
   },
   "overrides": {
     "serialize-javascript": ">=7.0.3",

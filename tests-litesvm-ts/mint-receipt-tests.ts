@@ -1,6 +1,6 @@
 /* Build the Solana programs first:
 $ anchor build
-Then run with NodeJs v25.9.0 (or v22.18.0+):
+Then run with NodeJs v26.0.0 (or v22.18.0+):
 $ node ./tests-litesvm-ts/mint-receipt-tests.ts
 */
 
@@ -12,11 +12,12 @@ import {
 import {
   Ed25519Program,
   Keypair,
-  PublicKey,
+  type PublicKey,
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
 import { expect } from "chai";
+import { maxComputeBudgets } from "./cu-budgets.ts";
 import {
   anchorAddr,
   BASE_TRUST_INCREMENT,
@@ -26,7 +27,6 @@ import {
   MIN_STAKE,
   mintAuthorityPda,
   protocolConfigPda,
-  registryAddr,
   SYSTEM_PROGRAM,
   treasuryPda,
   VERIFICATION_FEE,
@@ -54,12 +54,18 @@ const validatorKp = Keypair.generate();
 
 const tokenProgram = TOKEN_2022_PROGRAM_ID;
 
-const MINT_ANCHOR_DISCRIMINATOR = Buffer.from([68, 56, 113, 102, 236, 152, 146, 60]);
+const MINT_ANCHOR_DISCRIMINATOR = Buffer.from([
+  68, 56, 113, 102, 236, 152, 146, 60,
+]);
 
 // Build the canonical receipt message:
 //   wallet_pubkey (32) || commitment_new (32) || validated_at i64 LE (8) = 72 bytes
 // Mirrors entros_validation::receipts and entros_anchor::verify_mint_receipt.
-function buildReceiptMessage(wallet: PublicKey, commitment: Buffer, validatedAt: bigint): Buffer {
+function buildReceiptMessage(
+  wallet: PublicKey,
+  commitment: Buffer,
+  validatedAt: bigint,
+): Buffer {
   const ts = Buffer.alloc(8);
   ts.writeBigInt64LE(validatedAt);
   return Buffer.concat([wallet.toBuffer(), commitment, ts]);
@@ -79,7 +85,11 @@ function buildMintAnchorIx(
       { pubkey: mintPda, isSigner: false, isWritable: true },
       { pubkey: mintAuthorityPda, isSigner: false, isWritable: false },
       { pubkey: ataPda, isSigner: false, isWritable: true },
-      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      {
+        pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,
+        isSigner: false,
+        isWritable: false,
+      },
       { pubkey: tokenProgram, isSigner: false, isWritable: false },
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
       { pubkey: protocolConfigPda, isSigner: false, isWritable: false },
@@ -119,14 +129,25 @@ test("mint_anchor without an Ed25519 receipt rejects with MissingValidatorReceip
     pdas.mintPda,
     pdas.ata,
   );
-  sendTxns(svm.latestBlockhash(), [ix], [user1Kp], anchorAddr, expectedErr);
+  sendTxns(
+    svm.latestBlockhash(),
+    [ix],
+    [user1Kp],
+    anchorAddr,
+    maxComputeBudgets.mint_anchor,
+    expectedErr,
+  );
 });
 
 test("mint_anchor with a valid Ed25519 receipt succeeds", async () => {
   const pdas = pdasBySignerKp(adminKp);
   const commitment = Buffer.alloc(32, 9); // arbitrary non-zero commitment
 
-  const message = buildReceiptMessage(adminKp.publicKey, commitment, fixedNowSecs);
+  const message = buildReceiptMessage(
+    adminKp.publicKey,
+    commitment,
+    fixedNowSecs,
+  );
 
   // createInstructionWithPrivateKey signs the message with the validator's
   // secretKey and constructs an Ed25519Program::verify ix whose three
@@ -164,5 +185,7 @@ test("mint_anchor with a valid Ed25519 receipt succeeds", async () => {
   // The success path no longer logs from verify_mint_receipt; presence of
   // the standard mint_anchor program log is the success signal.
   const logs = (sendRes as unknown as { logs(): string[] }).logs();
-  expect(logs.some((l) => l.includes("Program log: Instruction: MintAnchor"))).to.equal(true);
+  expect(
+    logs.some((l) => l.includes("Program log: Instruction: MintAnchor")),
+  ).to.equal(true);
 });

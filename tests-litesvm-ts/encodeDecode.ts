@@ -424,3 +424,20 @@ export const decodeMetaData = (
   const value = bytesToStr(valueBytes, strName, verbose);
   return { value, index };
 };
+
+// Convert integers to Human format
+export const toHumanInt = (num: number) => {
+  //if (!Number.isInteger(num)) throw new Error("input should be an integer");
+  if (num >= 1000000000) {
+    const billions = parseFloat((num / 1000000000).toFixed(2));
+    return `${billions}B`;
+  } else if (num >= 1000000) {
+    const millions = parseFloat((num / 1000000).toFixed(2));
+    return `${millions}M`;
+  } else if (num >= 1000) {
+    const thousands = parseFloat((num / 1000).toFixed(2));
+    return `${thousands}K`;
+  } else {
+    return num.toString();
+  }
+};

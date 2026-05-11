@@ -17,6 +17,7 @@ import {
   type SimulatedTransactionInfo,
   TransactionMetadata,
 } from "litesvm";
+import { maxComputeBudgets } from "./cu-budgets.ts";
 import {
   anchorAddr,
   decodeMetaData,
@@ -240,7 +241,14 @@ export const initializeProtocol = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.initialize_protocol,
+    expectedErr,
+  );
 };
 
 export const updateProtocolConfig = (
@@ -263,7 +271,14 @@ export const updateProtocolConfig = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.update_protocol_config,
+    expectedErr,
+  );
 };
 
 /// Set the validator signing pubkey for mint receipt binding
@@ -289,7 +304,14 @@ export const setValidatorPubkey = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.set_validator_pubkey,
+    expectedErr,
+  );
 };
 
 export const registerValidator = (
@@ -316,7 +338,14 @@ export const registerValidator = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.register_validator,
+    expectedErr,
+  );
 };
 
 export const withdrawTreasury = (
@@ -341,7 +370,14 @@ export const withdrawTreasury = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.withdraw_treasury,
+    expectedErr,
+  );
 };
 
 //-------------==
@@ -410,7 +446,14 @@ export const migrateAdmin = (
     programId: progAddr,
     data: Buffer.from([...disc]),
   });
-  sendTxns(blockhash, [ix], [new_adminKp], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [new_adminKp],
+    progAddr,
+    maxComputeBudgets.migrate_admin,
+    expectedErr,
+  );
 };
 //-------------== entrosAnchor Program Methods
 export const mintAnchor = (
@@ -450,7 +493,14 @@ export const mintAnchor = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.mint_anchor,
+    expectedErr,
+  );
 };
 
 export const authorizeNewWallet = (
@@ -477,7 +527,14 @@ export const authorizeNewWallet = (
     programId: progAddr,
     data: Buffer.from([...disc]),
   });
-  sendTxns(blockhash, [ix], [signer, signer_new], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer, signer_new],
+    progAddr,
+    maxComputeBudgets.authorize_new_wallet,
+    expectedErr,
+  );
 };
 
 export const expectTheSameArray = (array1: bigint[], array2: bigint[]) => {
@@ -525,7 +582,14 @@ export const migrateIdentity = (
     programId: progAddr,
     data: Buffer.from([...disc]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.migrate_identity,
+    expectedErr,
+  );
 };
 
 export const updateAnchor = (
@@ -556,7 +620,14 @@ export const updateAnchor = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.update_anchor,
+    expectedErr,
+  );
 };
 
 export const resetIdentityState = (
@@ -582,7 +653,14 @@ export const resetIdentityState = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.reset_identity_state,
+    expectedErr,
+  );
 };
 
 //-------------== Verifier
@@ -605,7 +683,14 @@ export const createChallenge = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [challenger], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [challenger],
+    progAddr,
+    maxComputeBudgets.create_challenge,
+    expectedErr,
+  );
 };
 
 export const closeChallenge = (
@@ -625,7 +710,14 @@ export const closeChallenge = (
     programId: progAddr,
     data: Buffer.from([...disc]),
   });
-  sendTxns(blockhash, [ix], [challenger], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [challenger],
+    progAddr,
+    maxComputeBudgets.close_challenge,
+    expectedErr,
+  );
 };
 
 export const closeVerificationResult = (
@@ -645,7 +737,14 @@ export const closeVerificationResult = (
     programId: progAddr,
     data: Buffer.from([...disc]),
   });
-  sendTxns(blockhash, [ix], [verifier], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [verifier],
+    progAddr,
+    maxComputeBudgets.close_verification_result,
+    expectedErr,
+  );
 };
 
 export const verifyProof = (
@@ -681,7 +780,14 @@ export const verifyProof = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(blockhash, [ix], [signer], progAddr, expectedErr);
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.verify_proof,
+    expectedErr,
+  );
 };
 
 //-------------== Time Manipulation
@@ -742,6 +848,7 @@ export const sendTxns = (
   ixs: TransactionInstruction[],
   signerKps: Keypair[],
   programId: PublicKey,
+  maxComputeBudget: number,
   expectedError = "",
 ) => {
   const tx = new Transaction();
@@ -750,13 +857,14 @@ export const sendTxns = (
   tx.sign(...signerKps); //first signature is considered "primary" and is used identify and confirm transactions.
   const simRes = svm.simulateTransaction(tx);
   const sendRes = svm.sendTransaction(tx);
-  checkLogs(simRes, sendRes, programId, expectedError);
+  checkLogs(simRes, sendRes, programId, maxComputeBudget, expectedError);
 };
 //-------------== Send SOL
 export const sendSol = (
   signer: Keypair,
   receiver: PublicKey,
   transferLamports = BigInt(1_000_000),
+  maxComputeBudget = 1000,
   expectedError = "",
 ) => {
   //const receiver = PublicKey.unique();
@@ -774,12 +882,13 @@ export const sendSol = (
   tx.sign(signer);
   const simRes = svm.simulateTransaction(tx);
   const sendRes = svm.sendTransaction(tx);
-  checkLogs(simRes, sendRes, SYSTEM_PROGRAM, expectedError);
+  checkLogs(simRes, sendRes, SYSTEM_PROGRAM, maxComputeBudget, expectedError);
 };
 export const checkLogs = (
   simRes: FailedTransactionMetadata | SimulatedTransactionInfo,
   sendRes: TransactionMetadata | FailedTransactionMetadata,
   programId: PublicKey,
+  maxComputeBudget: number,
   expectedError = "",
   isVerbose = false,
 ) => {
@@ -811,13 +920,14 @@ export const checkLogs = (
       `Program ${programId} success`,
     );
     const computeUnitsConsumed = sendRes.computeUnitsConsumed();
-    const computeUnitsRemained = BigInt(200000) - computeUnitsConsumed;
+    const computeUnitsHeadroom = BigInt(200000) - computeUnitsConsumed;
     console.log(
       "computeUnits Consumed:",
       computeUnitsConsumed,
-      ", Remained:",
-      computeUnitsRemained,
+      ", Headroom:",
+      computeUnitsHeadroom,
     );
+    expect(Number(computeUnitsConsumed)).to.be.at.most(maxComputeBudget);
   } else {
     console.log("txn failed");
     console.log("sendRes.err():", sendRes.err());
