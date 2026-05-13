@@ -2,7 +2,9 @@
 
 Default limit is 200,000 Compute Units (CU) per instruction.
 
-The following CU values are ceilings (maximum expected values) used by the regression suite. Anything ≤ the listed value passes, anything > the listed value fails. Such ceilings are measured by running each of the LiteSVM tests 10 times and picking the maximum measured CU for each of our Solana write functions. Last verified: 2026-05-07.
+The following CU values are ceilings (maximum expected values) used by the regression suite. Anything ≤ the listed value passes, anything > the listed value fails. Such ceilings are measured by running each of the LiteSVM tests 10 times and picking the maximum measured CU for each of our Solana write functions. Last verified: 2026-05-13.
+
+**2026-05-13 update.** Enabling the `init-if-needed` feature on `anchor-lang` (required by the new `set_encrypted_baseline` instruction on entros-anchor) adds a small CU drift to all instructions across the workspace (~1-3%). The new ceilings below reflect the post-feature measurements. `set_encrypted_baseline` added to entros-anchor.
 
 ## entros-anchor
 
@@ -13,19 +15,20 @@ The following CU values are ceilings (maximum expected values) used by the regre
 | authorize_new_wallet | 27.48K | 172.51K | Included operations: add new signer in IdentityPDA, approve token delegate |
 | migrate_identity | 115.2K | 84.8K | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
 | reset_identity_state | 30.49K | 169.51K | User-initiated baseline recovery; writes new commitment, zeroes verification history, charges protocol fee, 7-day cooldown enforced. May realloc legacy accounts |
+| set_encrypted_baseline | 16.91K (init) / 12.42K (update) | 183.09K / 187.58K | Master-list #98. `init_if_needed` creates the EncryptedBaseline PDA on first call (~17K CU), update overwrites existing blob (~12K CU). Blob is opaque 96-byte AES-256-GCM ciphertext encrypted off-chain. Pre-mint guard enforces existing IdentityState via `data_len() > 0` |
 
 ## entros-registry
 
 | Instruction | CU Consumed | Headroom | Notes |
 |-------------|-------------|----------|-------|
-| initialize_protocol | 6.96K | 193.04K | One-time admin setup |
+| initialize_protocol | 7.15K | 192.85K | One-time admin setup |
 | register_validator | 26.49K | 173.51K | Includes SOL stake transfer |
 | compute_trust_score | 5.93K | 194.07K | Pure computation, no state mutation |
 | unstake_validator | 8.87K | 191.13K | Returns staked SOL |
-| update_protocol_config | 4.62K | 195.38K | Simple field update, may realloc |
-| withdraw_treasury | 7.59K | 192.41K | SOL transfer from treasury |
+| update_protocol_config | 4.64K | 195.36K | Simple field update, may realloc |
+| withdraw_treasury | 7.66K | 192.34K | SOL transfer from treasury |
 | migrate_admin | 11.14K | 188.86K | Simple field update + ProtocolConfig realloc + raw-byte admin write |
-| set_validator_pubkey | 3.33K | 196.67K | Admin-only; writes validator signing pubkey to ProtocolConfig (offset 77) used by mint_anchor receipt verification. Realloc 77→109 bytes on first call against legacy account |
+| set_validator_pubkey | 3.31K | 196.69K | Admin-only; writes validator signing pubkey to ProtocolConfig (offset 77) used by mint_anchor receipt verification. Realloc 77→109 bytes on first call against legacy account |
 
 ## entros-verifier
 
