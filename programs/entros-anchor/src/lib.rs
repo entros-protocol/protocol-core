@@ -17,7 +17,7 @@ mod errors;
 mod state;
 
 use errors::EntrosAnchorError;
-use state::IdentityState;
+use state::{EncryptedBaseline, IdentityState};
 
 declare_id!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
 
@@ -1214,6 +1214,48 @@ pub mod entros_anchor {
 
         Ok(())
     }
+
+    /// Write or overwrite the caller's encrypted baseline blob.
+    ///
+    /// The blob is opaque to the program — AES-256-GCM ciphertext of the
+    /// user's previous SimHash plus salt, produced off-chain in the SDK
+    /// under a key derived from a deterministic `signMessage`. The GCM
+    /// auth tag binds the blob to (wallet, this PDA's address, on-chain
+    /// `current_commitment` at encryption time), so a stale blob produced
+    /// before a `reset_identity_state` fails authentication under the new
+    /// commitment and the SDK falls back to a fresh-capture flow.
+    ///
+    /// The program never decrypts the blob — it only stores opaque bytes.
+    /// Plaintext biometric data never reaches chain at any point.
+    ///
+    /// Guards:
+    ///   * Signer must equal the wallet that seeds the EncryptedBaseline
+    ///     PDA (enforced by the seeds constraint on the Accounts struct).
+    ///   * The caller's IdentityState PDA at `[b"identity", signer]` must
+    ///     already exist — pre-mint attempts are rejected with
+    ///     `IdentityStateNotFound`. Anchor's seeds constraint validates the
+    ///     PDA address; the `data_len() > 0` check confirms initialization.
+    pub fn set_encrypted_baseline(
+        ctx: Context<SetEncryptedBaseline>,
+        blob: [u8; 96],
+    ) -> Result<()> {
+        // Pre-mint guard. Anchor's seeds constraint validates the PDA
+        // address but does not require the account to be initialized.
+        require!(
+            ctx.accounts.identity_state.data_len() > 0,
+            EntrosAnchorError::IdentityStateNotFound
+        );
+
+        let baseline = &mut ctx.accounts.encrypted_baseline;
+        baseline.blob = blob;
+        baseline.bump = ctx.bumps.encrypted_baseline;
+
+        emit!(EncryptedBaselineSet {
+            owner: ctx.accounts.authority.key(),
+        });
+
+        Ok(())
+    }
 }
 
 // --- Account Contexts ---
@@ -1469,6 +1511,36 @@ pub struct ResetIdentityState<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct SetEncryptedBaseline<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: Existence verified by `data_len() > 0` in the handler.
+    /// UncheckedAccount because we only need to verify the IdentityState
+    /// PDA exists at the expected address — we don't need to deserialize
+    /// its fields. The seeds constraint validates the PDA address.
+    #[account(
+        seeds = [b"identity", authority.key().as_ref()],
+        bump,
+    )]
+    pub identity_state: UncheckedAccount<'info>,
+
+    /// The EncryptedBaseline PDA. Created on first call, overwritten on
+    /// subsequent calls. PDA seeds bind to the signer's wallet, so only
+    /// the wallet owner can write to their own baseline.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = EncryptedBaseline::LEN,
+        seeds = [b"encrypted_baseline", authority.key().as_ref()],
+        bump,
+    )]
+    pub encrypted_baseline: Account<'info, EncryptedBaseline>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // --- Events ---
 
 #[event]
@@ -1497,4 +1569,9 @@ pub struct AnchorReset {
     pub owner: Pubkey,
     pub mint: Pubkey,
     pub commitment: [u8; 32],
+}
+
+#[event]
+pub struct EncryptedBaselineSet {
+    pub owner: Pubkey,
 }
