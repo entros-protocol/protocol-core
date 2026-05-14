@@ -260,6 +260,31 @@ export type IdentityStateAcctWeb3js = {
   last_reset_timestamp: bigint;
   new_wallet: PublicKey;
 };
+
+//-----------== EncryptedBaseline (master-list #98)
+// Separate per-wallet PDA storing an opaque 96-byte AES-256-GCM ciphertext
+// of the user's SimHash + salt. Encryption happens off-chain in the SDK
+// under a key derived from a deterministic signMessage. The program never
+// decrypts the blob.
+export const deriveEncryptedBaselinePda = (user: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("encrypted_baseline"), user.toBuffer()],
+    anchorAddr,
+  );
+export type EncryptedBaselineAcct = {
+  anchorDiscriminator: ReadonlyUint8Array;
+  blob: ReadonlyUint8Array; // 96 bytes
+  bump: number;
+};
+export const encryptedBaselineAcctDecoder: FixedSizeDecoder<EncryptedBaselineAcct> =
+  getStructDecoder([
+    ["anchorDiscriminator", fixDecoderSize(getBytesDecoder(), 8)],
+    ["blob", fixDecoderSize(getBytesDecoder(), 96)],
+    ["bump", getU8Decoder()],
+  ]);
+export const decodeEncryptedBaseline = (
+  bytes: ReadonlyUint8Array | Uint8Array<ArrayBufferLike>,
+) => encryptedBaselineAcctDecoder.decode(bytes);
 //-----------== ProtocolConfigPDA
 export const [protocolConfigPda, protocolConfigBump] =
   PublicKey.findProgramAddressSync(

@@ -48,3 +48,34 @@ impl IdentityState {
     /// accounts that need realloc before the new field can be written.
     pub const LEN_PRE_RESET: usize = 543;
 }
+
+/// Wallet-keyed encrypted baseline blob, stored at PDA seeds
+/// `[b"encrypted_baseline", wallet.key().as_ref()]`. Persists the user's
+/// previous SimHash + salt across cache wipes and device changes so the
+/// Hamming-distance ZK proof can recover its private witnesses on any
+/// device with the originating wallet.
+///
+/// The blob is opaque ciphertext to the program — AES-256-GCM produced
+/// off-chain in the SDK under a key derived from a deterministic
+/// `signMessage` on a domain-separated payload. The GCM AAD binds the
+/// blob to (wallet, this PDA's address, current on-chain commitment),
+/// so a stale blob (post-`reset_identity_state`) fails authentication
+/// against the new commitment and the SDK falls back to a fresh-capture
+/// flow.
+///
+/// The program never decrypts the blob — it only stores opaque bytes.
+/// Plaintext biometric data never reaches chain at any point.
+#[account]
+pub struct EncryptedBaseline {
+    /// 96-byte versioned ciphertext envelope.
+    /// Layout: version(1) || algo(1) || reserved(2) || iv(12) || ct+tag(80).
+    pub blob: [u8; 96],
+    /// PDA bump seed.
+    pub bump: u8,
+}
+
+impl EncryptedBaseline {
+    pub const LEN: usize = 8   // discriminator
+        + 96  // blob
+        + 1;  // bump
+}

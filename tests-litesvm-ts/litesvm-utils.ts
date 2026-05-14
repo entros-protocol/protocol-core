@@ -21,6 +21,8 @@ import { maxComputeBudgets } from "./cu-budgets.ts";
 import {
   anchorAddr,
   decodeMetaData,
+  deriveEncryptedBaselinePda,
+  deriveIdentityPda,
   getPdas,
   INSTRUCTIONS_SYSVAR,
   loadProofFixture,
@@ -310,6 +312,46 @@ export const setValidatorPubkey = (
     [signer],
     progAddr,
     maxComputeBudgets.set_validator_pubkey,
+    expectedErr,
+  );
+};
+
+/// Write or overwrite the caller's encrypted baseline blob (master-list #98).
+/// Uses init_if_needed on the EncryptedBaseline PDA at seeds
+/// [b"encrypted_baseline", signer.publicKey]. The program enforces that
+/// the IdentityState PDA exists at [b"identity", signer.publicKey] before
+/// writing — pre-mint attempts fail with IdentityStateNotFound.
+export const setEncryptedBaseline = (
+  signer: Keypair,
+  blob: Uint8Array, // must be exactly 96 bytes
+  expectedErr = "",
+) => {
+  if (blob.length !== 96) {
+    throw new Error(`blob must be 96 bytes, got ${blob.length}`);
+  }
+  // sha256("global:set_encrypted_baseline")[:8]
+  const disc = [10, 73, 41, 36, 2, 145, 87, 111];
+  const progAddr = anchorAddr;
+  const [identityPda] = deriveIdentityPda(signer.publicKey);
+  const [baselinePda] = deriveEncryptedBaselinePda(signer.publicKey);
+  const argData = [...blob];
+  const blockhash = svm.latestBlockhash();
+  const ix = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: identityPda, isSigner: false, isWritable: false },
+      { pubkey: baselinePda, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    programId: progAddr,
+    data: Buffer.from([...disc, ...argData]),
+  });
+  sendTxns(
+    blockhash,
+    [ix],
+    [signer],
+    progAddr,
+    maxComputeBudgets.set_encrypted_baseline,
     expectedErr,
   );
 };

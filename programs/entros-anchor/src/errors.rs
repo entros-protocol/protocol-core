@@ -46,4 +46,6 @@ pub enum EntrosAnchorError {
     ReceiptFromFuture,
     #[msg("Receipt message has malformed length or layout")]
     MalformedReceiptMessage,
+    #[msg("set_encrypted_baseline called before mint_anchor — IdentityState PDA does not exist")]
+    IdentityStateNotFound,
 }
