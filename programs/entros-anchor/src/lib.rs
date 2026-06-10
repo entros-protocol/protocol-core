@@ -86,7 +86,8 @@ const MAX_RECEIPT_AGE_SECS: i64 = 300;
 /// sync with `entros_registry::state::ProtocolConfig::OFFSET_VALIDATOR_PUBKEY`.
 /// Reading at this offset requires `data.len() >= 109` — pre-migration
 /// ProtocolConfig accounts (77 bytes) trip the length guard and the
-/// receipt check is skipped (Phase 3 is log-only either way).
+/// receipt check is skipped — `verify_mint_receipt` treats the resulting
+/// all-zero `validator_pubkey` as not-yet-migrated and returns Ok.
 const PC_OFFSET_VALIDATOR_PUBKEY: usize = 77;
 const PC_LEN_WITH_VALIDATOR_PUBKEY: usize = 109;
 
@@ -120,7 +121,8 @@ const ED25519_MSG_IX_INDEX_OFFSET: usize = 14;
 /// Any other value is a cross-instruction reference, which would let the
 /// signed pubkey or message data live in a different ix while we naively
 /// parse it from this ix's data — closing that door is what defends
-/// against substitution attacks under Phase 5 enforcement.
+/// against substitution attacks wherever the receipt is enforced (i.e.
+/// whenever `validator_pubkey` is configured).
 const ED25519_IX_INDEX_CURRENT: u16 = 0xFFFF;
 
 /// Integer square root via Newton's method (deterministic, no floating point).
@@ -505,9 +507,13 @@ pub mod entros_anchor {
         }
         drop(config_data);
 
-        // Phase 3: log-only receipt binding. Result is informational —
-        // every check failure logs and proceeds. Phase 5 will swap each
-        // `msg!` for a `return Err(...)` to begin enforcement.
+        // Receipt binding is ENFORCED whenever `validator_pubkey` is
+        // configured: `verify_mint_receipt` returns `Err` (propagated by the
+        // `?` below) on a missing, mismatched, stale, or wrong-key receipt, so
+        // the mint fails closed. A pre-migration ProtocolConfig leaves
+        // `validator_pubkey` all-zero, which `verify_mint_receipt` treats as
+        // not-yet-migrated and skips — the only path that still mints without a
+        // receipt.
         let now = Clock::get()?.unix_timestamp;
         verify_mint_receipt(
             &ctx.accounts.instructions_sysvar,
