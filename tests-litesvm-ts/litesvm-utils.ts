@@ -2,6 +2,7 @@ import { struct, u8, u32 } from "@solana/buffer-layout";
 import { publicKey, u64 } from "@solana/buffer-layout-utils";
 import { AccountLayout, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
+  Ed25519Program,
   Keypair,
   LAMPORTS_PER_SOL,
   type PublicKey,
@@ -39,6 +40,14 @@ export const adminKp = new Keypair();
 export const admin2Kp = new Keypair();
 export const user1Kp = new Keypair();
 export const hackerKp = new Keypair();
+
+// Shared mint-receipt validator. `initializeProtocol` defaults the on-chain
+// ProtocolConfig.validator_pubkey to this key, and `mintAnchor` signs the
+// receipt it prepends with the matching secret — so helper-built mints satisfy
+// the on-chain receipt binding without each test wiring its own key. Suites
+// that need their own validator (mint-receipt-tests, encrypted-baseline-tests)
+// pass an explicit validator_pubkey and build their own receipts.
+export const LITESVM_VALIDATOR = new Keypair();
 
 export const owner = ownerKp.publicKey;
 export const admin = adminKp.publicKey;
@@ -219,6 +228,7 @@ export const initializeProtocol = (
   max_trust_score: number, //u16,
   base_trust_increment: number, //u16,
   verification_fee: bigint,
+  validator_pubkey: PublicKey = LITESVM_VALIDATOR.publicKey,
   expectedErr = "",
 ) => {
   const disc = [188, 233, 252, 106, 134, 146, 202, 91]; //copied from Anchor IDL
@@ -232,6 +242,7 @@ export const initializeProtocol = (
     ...numToBytes(max_trust_score, 16),
     ...numToBytes(base_trust_increment, 16),
     ...numToBytes(verification_fee),
+    ...validator_pubkey.toBytes(),
   ];
   const blockhash = svm.latestBlockhash();
   const ix = new TransactionInstruction({
@@ -535,9 +546,26 @@ export const mintAnchor = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
+  // Prepend a validator-signed mint receipt. mint_anchor now fails closed when
+  // the validator is configured (it always is — initializeProtocol writes
+  // LITESVM_VALIDATOR), so every successful mint needs a preceding
+  // Ed25519Program::verify receipt signed by that key. validated_at = the
+  // current svm clock, so the on-chain freshness check sees validated_at == now.
+  const validatedAt = svm.getClock().unixTimestamp;
+  const tsBuf = Buffer.alloc(8);
+  tsBuf.writeBigInt64LE(validatedAt);
+  const receiptMsg = Buffer.concat([
+    signer.publicKey.toBuffer(),
+    commitment,
+    tsBuf,
+  ]);
+  const receiptIx = Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: LITESVM_VALIDATOR.secretKey,
+    message: receiptMsg,
+  });
   sendTxns(
     blockhash,
-    [ix],
+    [receiptIx, ix],
     [signer],
     progAddr,
     maxComputeBudgets.mint_anchor,

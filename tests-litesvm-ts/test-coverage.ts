@@ -40,6 +40,7 @@ import {
   expireBlockhash,
   hackerKp,
   initializeProtocol,
+  LITESVM_VALIDATOR,
   migrateAdmin,
   mintAnchor,
   pdasAdmin,
@@ -369,6 +370,7 @@ test("registry.initializeProtocol(): 2nd time should fail", async () => {
     max_trust_score,
     base_trust_increment,
     verification_fee,
+    LITESVM_VALIDATOR.publicKey,
     expectedErr,
   );
 });
