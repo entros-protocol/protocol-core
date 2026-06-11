@@ -48,4 +48,6 @@ pub enum EntrosAnchorError {
     MalformedReceiptMessage,
     #[msg("set_encrypted_baseline called before mint_anchor — IdentityState PDA does not exist")]
     IdentityStateNotFound,
+    #[msg("ProtocolConfig.validator_pubkey is unset (all-zero); minting is disabled until a validator is configured")]
+    ValidatorNotConfigured,
 }

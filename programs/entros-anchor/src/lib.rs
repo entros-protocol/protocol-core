@@ -85,9 +85,8 @@ const MAX_RECEIPT_AGE_SECS: i64 = 300;
 /// Byte offset of `ProtocolConfig.validator_pubkey` (32 bytes). Keep in
 /// sync with `entros_registry::state::ProtocolConfig::OFFSET_VALIDATOR_PUBKEY`.
 /// Reading at this offset requires `data.len() >= 109` — pre-migration
-/// ProtocolConfig accounts (77 bytes) trip the length guard and the
-/// receipt check is skipped — `verify_mint_receipt` treats the resulting
-/// all-zero `validator_pubkey` as not-yet-migrated and returns Ok.
+/// ProtocolConfig accounts (77 bytes) trip the length guard and leave the
+/// pubkey all-zero, which `verify_mint_receipt` now rejects (fail closed).
 const PC_OFFSET_VALIDATOR_PUBKEY: usize = 77;
 const PC_LEN_WITH_VALIDATOR_PUBKEY: usize = 109;
 
@@ -144,10 +143,10 @@ fn isqrt(n: u64) -> u64 {
 /// `Ed25519Program::verify` instruction preceding the current `mint_anchor`
 /// call (master-list #146).
 ///
-/// Enforced: any failed check returns the corresponding Receipt* error.
-/// The single skip path — zero-pubkey on ProtocolConfig — exists only to
-/// keep the program operable during the admin's `set_validator_pubkey`
-/// migration window; on a configured deployment it is unreachable.
+/// Enforced + fail-closed: any failed check returns the corresponding
+/// Receipt* error, and an unconfigured (all-zero) `validator_pubkey` is
+/// rejected with `ValidatorNotConfigured` rather than skipped — so no
+/// deployment can mint without a verified receipt.
 ///
 /// The receipt message layout matches the validator's canonical form:
 ///   `wallet_pubkey (32) || commitment_new (32) || validated_at i64 LE (8) = 72 bytes`
@@ -168,12 +167,15 @@ fn verify_mint_receipt(
         load_current_index_checked, load_instruction_at_checked,
     };
 
-    // Zero-pubkey indicates the protocol admin has not yet run
-    // `set_validator_pubkey` to migrate ProtocolConfig. Skip — this path
-    // is only reachable during the migration window before enforcement.
+    // Fail closed: an all-zero `validator_pubkey` means ProtocolConfig has no
+    // validator configured — a pre-migration (77-byte) account, or a fresh
+    // deployment whose validator was never set. Rather than mint without a
+    // verified receipt, reject. `entros_registry::initialize_protocol` now
+    // writes a non-zero pubkey atomically at creation and rejects zero, so a
+    // correctly-initialized deployment never reaches this branch.
     if validator_pubkey == &[0u8; 32] {
-        msg!("RECEIPT: validator_pubkey not configured; skipping (pre-migration)");
-        return Ok(());
+        msg!("RECEIPT: validator_pubkey not configured; rejecting (fail closed)");
+        return Err(EntrosAnchorError::ValidatorNotConfigured.into());
     }
 
     let current_index = load_current_index_checked(instructions_sysvar)? as usize;
@@ -495,10 +497,10 @@ pub mod entros_anchor {
             0
         };
         // Read the validator pubkey for mint receipt binding (master-list
-        // #146 Phase 3). Pre-migration ProtocolConfig (77 bytes, before
+        // #146). Pre-migration ProtocolConfig (77 bytes, before
         // entros-registry::set_validator_pubkey ran) trips the length
-        // guard and writes a zero pubkey, which the verify helper treats
-        // as "not yet configured" and skips the check entirely.
+        // guard and leaves a zero pubkey, which the verify helper now
+        // rejects (fail closed) rather than skipping.
         let mut validator_pubkey = [0u8; 32];
         if config_data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
             validator_pubkey.copy_from_slice(
@@ -507,13 +509,11 @@ pub mod entros_anchor {
         }
         drop(config_data);
 
-        // Receipt binding is ENFORCED whenever `validator_pubkey` is
-        // configured: `verify_mint_receipt` returns `Err` (propagated by the
-        // `?` below) on a missing, mismatched, stale, or wrong-key receipt, so
-        // the mint fails closed. A pre-migration ProtocolConfig leaves
-        // `validator_pubkey` all-zero, which `verify_mint_receipt` treats as
-        // not-yet-migrated and skips — the only path that still mints without a
-        // receipt.
+        // Receipt binding is ENFORCED and fails closed: `verify_mint_receipt`
+        // returns `Err` (propagated by the `?` below) on a missing, mismatched,
+        // stale, or wrong-key receipt, AND on an all-zero `validator_pubkey`
+        // (an unconfigured or pre-migration ProtocolConfig). No mint path
+        // proceeds without a verified validator receipt.
         let now = Clock::get()?.unix_timestamp;
         verify_mint_receipt(
             &ctx.accounts.instructions_sysvar,
