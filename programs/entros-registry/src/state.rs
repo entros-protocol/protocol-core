@@ -20,9 +20,10 @@ pub struct ProtocolConfig {
     /// Public key the off-chain validator service uses to sign mint receipts
     /// (master-list #146). entros-anchor::mint_anchor verifies an
     /// Ed25519Program::verify instruction in the same transaction was signed
-    /// against this key. Set via `set_validator_pubkey` (admin-only); zero
-    /// pubkey means "receipts not yet configured" — entros-anchor treats
-    /// that as pre-migration and skips the check.
+    /// against this key. Set atomically at `initialize_protocol` and rotated
+    /// via `set_validator_pubkey` (admin-only); both reject a zero pubkey. A
+    /// zero pubkey (only possible on a pre-migration account) makes
+    /// entros-anchor reject the mint (fail closed), not skip the check.
     pub validator_pubkey: Pubkey,
 }
 

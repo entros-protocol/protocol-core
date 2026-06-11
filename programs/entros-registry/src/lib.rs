@@ -44,7 +44,18 @@ pub mod entros_registry {
         max_trust_score: u16,
         base_trust_increment: u16,
         verification_fee: u64,
+        validator_pubkey: Pubkey,
     ) -> Result<()> {
+        // Set the validator pubkey atomically at creation and reject zero:
+        // entros-anchor fails closed on an all-zero pubkey, so a config born
+        // without one would disable minting until a separate migration ran.
+        // `InitializeProtocol` allocates the full `ProtocolConfig::LEN`, so the
+        // field is in-bounds here — no realloc needed. Rotation later still
+        // goes through `set_validator_pubkey`.
+        require!(
+            validator_pubkey != Pubkey::default(),
+            RegistryError::InvalidValidatorPubkey
+        );
         let config = &mut ctx.accounts.protocol_config;
         config.admin = ctx.accounts.admin.key();
         config.min_stake = min_stake;
@@ -53,6 +64,7 @@ pub mod entros_registry {
         config.base_trust_increment = base_trust_increment;
         config.bump = ctx.bumps.protocol_config;
         config.verification_fee = verification_fee;
+        config.validator_pubkey = validator_pubkey;
         Ok(())
     }
 
@@ -85,9 +97,9 @@ pub mod entros_registry {
     /// account would fail deserialization with `AccountDidNotDeserialize`
     /// before the resize could fix it.
     ///
-    /// Zero pubkey is rejected — entros-anchor treats a zero pubkey as
-    /// "receipts not yet configured" and skips the on-chain check, so
-    /// writing zero would silently disable the binding rather than rotate.
+    /// Zero pubkey is rejected — entros-anchor fails closed on a zero pubkey
+    /// (rejects the mint), so writing zero would brick minting rather than
+    /// rotate the binding.
     pub fn set_validator_pubkey(
         ctx: Context<SetValidatorPubkey>,
         validator_pubkey: Pubkey,
