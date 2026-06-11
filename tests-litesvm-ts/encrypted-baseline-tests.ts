@@ -153,6 +153,7 @@ test("setup: initializeProtocol + setValidatorPubkey + mint user1's identity", a
     MAX_TRUST_SCORE,
     BASE_TRUST_INCREMENT,
     VERIFICATION_FEE,
+    validatorKp.publicKey,
   );
   setValidatorPubkey(adminKp, validatorKp.publicKey, protocolConfigPda);
   mintUser1Identity();

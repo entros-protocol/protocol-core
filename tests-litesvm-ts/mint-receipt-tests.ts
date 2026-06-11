@@ -110,6 +110,7 @@ test("setup: initializeProtocol + setValidatorPubkey to a known signing keypair"
     MAX_TRUST_SCORE,
     BASE_TRUST_INCREMENT,
     VERIFICATION_FEE,
+    validatorKp.publicKey,
   );
   setValidatorPubkey(adminKp, validatorKp.publicKey, protocolConfigPda);
 });
