@@ -1,23 +1,22 @@
 import * as anchor from "@coral-xyz/anchor";
-import { createHash } from "crypto";
-import * as fs from "fs";
-import * as path from "path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const IAM_VERIFIER_PROGRAM_ID = new anchor.web3.PublicKey(
-  "4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV",
-);
-
+// Byte offsets into the raw account data (8-byte Anchor discriminator first).
+// Challenge:           [disc 8][challenger 32][nonce 32][created_at 8][expires_at 8][used 1][bump 1]
+// VerificationResult:  [disc 8][verifier 32][...]
 const CHALLENGER_OFFSET = 8;
-const EXPIRES_AT_OFFSET = 80;
 const USED_OFFSET = 88;
 const VERIFIER_OFFSET = 8;
 
-function accountDiscriminator(name: string): Buffer {
-  return createHash("sha256").update(`account:${name}`).digest().subarray(0, 8);
-}
-
-function readI64LE(data: Buffer, offset: number): bigint {
-  return data.readBigInt64LE(offset);
+// Read the authoritative account discriminator straight from the loaded IDL
+// rather than recomputing sha256("account:<Name>") — same bytes, one source.
+function accountDiscriminator(idl: anchor.Idl, name: string): Buffer {
+  const account = idl.accounts?.find((entry) => entry.name === name);
+  if (!account) {
+    throw new Error(`Account "${name}" not found in the verifier IDL.`);
+  }
+  return Buffer.from(account.discriminator);
 }
 
 function readBool(data: Buffer, offset: number): boolean {
@@ -27,7 +26,7 @@ function readBool(data: Buffer, offset: number): boolean {
 async function main(): Promise<void> {
   const walletArg = process.argv[2];
   if (!walletArg) {
-    console.error("Usage: npx tsx scripts/cleanup-pdas.ts <wallet-address>");
+    console.error("Usage: npm run cleanup-pdas -- <wallet-address>");
     process.exit(1);
   }
 
@@ -42,15 +41,19 @@ async function main(): Promise<void> {
     );
   }
 
-  const idlPath = path.resolve(__dirname, "../target/idl/iam_verifier.json");
-  const idl = JSON.parse(fs.readFileSync(idlPath, "utf8")) as anchor.Idl;
+  // Resolve the IDL relative to this file (ESM: no __dirname under `node`).
+  const idlPath = fileURLToPath(
+    new URL("../target/idl/entros_verifier.json", import.meta.url),
+  );
+  const idl = JSON.parse(readFileSync(idlPath, "utf8")) as anchor.Idl;
   const program = new anchor.Program(idl, provider);
+  const verifierProgramId = program.programId;
 
-  const challengeDisc = accountDiscriminator("Challenge");
-  const verificationResultDisc = accountDiscriminator("VerificationResult");
+  const challengeDisc = accountDiscriminator(idl, "Challenge");
+  const verificationResultDisc = accountDiscriminator(idl, "VerificationResult");
 
   const challengeAccounts = await provider.connection.getProgramAccounts(
-    IAM_VERIFIER_PROGRAM_ID,
+    verifierProgramId,
     {
       filters: [
         {
@@ -69,15 +72,15 @@ async function main(): Promise<void> {
     },
   );
 
-  const nowTs = BigInt(Math.floor(Date.now() / 1000));
-  const closeableChallenges = challengeAccounts.filter(({ account }) => {
-    const expiresAt = readI64LE(account.data, EXPIRES_AT_OFFSET);
-    const used = readBool(account.data, USED_OFFSET);
-    return used || expiresAt <= nowTs;
-  });
+  // Only `used` challenges are closeable: close_challenge enforces
+  // `constraint = challenge.used`. Expired-but-unused challenges are rejected
+  // on-chain, so attempting them would only burn failed transactions.
+  const closeableChallenges = challengeAccounts.filter(({ account }) =>
+    readBool(account.data, USED_OFFSET),
+  );
 
   const verificationAccounts = await provider.connection.getProgramAccounts(
-    IAM_VERIFIER_PROGRAM_ID,
+    verifierProgramId,
     {
       filters: [
         {
@@ -156,7 +159,7 @@ async function main(): Promise<void> {
   console.log("---------------");
   console.log(`Target wallet: ${targetWallet.toBase58()}`);
   console.log(`Challenge PDAs found: ${challengeAccounts.length}`);
-  console.log(`Challenge PDAs eligible: ${closeableChallenges.length}`);
+  console.log(`Challenge PDAs eligible (used): ${closeableChallenges.length}`);
   console.log(`Challenge PDAs closed: ${closedChallenges}`);
   console.log(`VerificationResult PDAs found: ${verificationAccounts.length}`);
   console.log(`VerificationResult PDAs closed: ${closedVerificationResults}`);

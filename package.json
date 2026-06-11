@@ -4,11 +4,11 @@
   "private": true,
   "scripts": {
     "test": "anchor test",
-    "cleanup-pdas": "npx --yes tsx scripts/cleanup-pdas.ts",
     "litesvm-transfer-sol": "node ./tests-litesvm-ts/transfer-sol.ts",
     "litesvm-coverage": "node ./tests-litesvm-ts/test-coverage.ts",
     "litesvm-trustscore": "node ./tests-litesvm-ts/clock-tests.ts",
-    "cu-budget": "node ./scripts/makeComputeBudgetDoc.ts"
+    "cu-budget": "node ./scripts/makeComputeBudgetDoc.ts",
+    "cleanup-pdas": "node ./scripts/cleanup-pdas.ts"
   },
   "overrides": {
     "serialize-javascript": ">=7.0.3",
