@@ -2,6 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { expect } from "chai";
 import type { EntrosRegistry } from "../target/types/entros_registry";
+import { TEST_VALIDATOR } from "./utils";
 
 describe("entros-registry", () => {
   const provider = anchor.AnchorProvider.env();
@@ -41,7 +42,8 @@ describe("entros-registry", () => {
           CHALLENGE_EXPIRY,
           MAX_TRUST_SCORE,
           BASE_TRUST_INCREMENT,
-          VERIFICATION_FEE
+          VERIFICATION_FEE,
+          TEST_VALIDATOR.publicKey
         )
         .accountsStrict({
           admin: admin.publicKey,
@@ -69,7 +71,8 @@ describe("entros-registry", () => {
           CHALLENGE_EXPIRY,
           MAX_TRUST_SCORE,
           BASE_TRUST_INCREMENT,
-          VERIFICATION_FEE
+          VERIFICATION_FEE,
+          TEST_VALIDATOR.publicKey
         )
         .accountsStrict({
           admin: admin.publicKey,

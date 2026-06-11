@@ -4,6 +4,39 @@ import { web3 } from "@coral-xyz/anchor";
 
 type PublicKey = web3.PublicKey;
 
+//--------- mint receipt (validator binding)
+// Deterministic validator signing key for tests. ProtocolConfig.validator_pubkey
+// is set to this key at initialize_protocol, so every receipt the tests build is
+// signed by the key the on-chain verifier expects. A fixed seed keeps it
+// identical across the test files that share the protocol_config PDA.
+export const TEST_VALIDATOR = web3.Keypair.fromSeed(
+  Uint8Array.from(new Array(32).fill(7)),
+);
+
+/**
+ * Build the Ed25519Program instruction carrying a validator-signed mint
+ * receipt. Prepend it (via `.preInstructions([...])`) immediately before
+ * `mintAnchor`; `verify_mint_receipt` reads it from the preceding instruction.
+ * Message layout matches the on-chain parser:
+ *   wallet(32) || commitment(32) || validated_at i64 LE(8) = 72 bytes.
+ * `validated_at` is backdated a few seconds so it is fresh but never ahead of
+ * the cluster clock (the future-check rejects ts > now).
+ */
+export function buildMintReceiptIx(
+  walletPubkey: PublicKey,
+  commitment: Buffer,
+): web3.TransactionInstruction {
+  const validatedAt = Math.floor(Date.now() / 1000) - 30;
+  const message = Buffer.alloc(72);
+  walletPubkey.toBuffer().copy(message, 0);
+  commitment.copy(message, 32);
+  message.writeBigInt64LE(BigInt(validatedAt), 64);
+  return web3.Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: TEST_VALIDATOR.secretKey,
+    message,
+  });
+}
+
 //--------- entrosAnchor
 export const deriveIdentityPda = (
   user: PublicKey,
@@ -123,7 +156,9 @@ export async function bootstrapVerifiedUser(params: {
       systemProgram: web3.SystemProgram.programId,
       protocolConfig: protocolConfigPda,
       treasury: treasuryPda,
+      instructionsSysvar: web3.SYSVAR_INSTRUCTIONS_PUBKEY,
     })
+    .preInstructions([buildMintReceiptIx(user.publicKey, initialCommitment)])
     .signers([user])
     .rpc();
 

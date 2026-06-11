@@ -8,7 +8,7 @@ import {
 import type { EntrosRegistry } from "../target/types/entros_registry";
 import type { EntrosAnchor } from "../target/types/entros_anchor";
 import type { EntrosVerifier } from "../target/types/entros_verifier";
-import { loadProofFixture } from "./utils";
+import { buildMintReceiptIx, loadProofFixture } from "./utils";
 
 const fixture = loadProofFixture();
 
@@ -118,7 +118,11 @@ describe("e2e: full Entros verification flow", () => {
         systemProgram: anchor.web3.SystemProgram.programId,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([
+        buildMintReceiptIx(e2eUser.publicKey, initialCommitment),
+      ])
       .signers([e2eUser])
       .rpc();
 

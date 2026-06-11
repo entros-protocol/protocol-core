@@ -13,9 +13,11 @@ import type { EntrosVerifier } from "../target/types/entros_verifier";
 import {
   airdrop,
   bootstrapVerifiedUser,
+  buildMintReceiptIx,
   deriveIdentityPda,
   deriveMintPda,
   loadProofFixture,
+  TEST_VALIDATOR,
 } from "./utils";
 
 describe("entros-anchor", () => {
@@ -61,6 +63,7 @@ describe("entros-anchor", () => {
           10000,
           100,
           new anchor.BN(0),
+          TEST_VALIDATOR.publicKey,
         )
         .accountsStrict({
           admin: provider.wallet.publicKey,
@@ -97,7 +100,9 @@ describe("entros-anchor", () => {
         systemProgram: anchor.web3.SystemProgram.programId,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([buildMintReceiptIx(user.publicKey, commitment)])
       .rpc();
 
     // Verify IdentityState
@@ -143,7 +148,9 @@ describe("entros-anchor", () => {
           systemProgram: anchor.web3.SystemProgram.programId,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
         })
+        .preInstructions([buildMintReceiptIx(user.publicKey, commitment)])
         .rpc();
       expect.fail("Should have thrown");
     } catch (err: any) {
@@ -184,12 +191,54 @@ describe("entros-anchor", () => {
         systemProgram: anchor.web3.SystemProgram.programId,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([buildMintReceiptIx(user2.publicKey, commitment)])
       .signers([user2])
       .rpc();
 
     const identity = await program.account.identityState.fetch(identityPda);
     expect(identity.owner.toBase58()).to.equal(user2.publicKey.toBase58());
+  });
+
+  it("rejects a mint with no validator receipt (fail closed)", async () => {
+    // ProtocolConfig.validator_pubkey is configured, so verify_mint_receipt
+    // enforces: a mint_anchor with no preceding Ed25519 receipt instruction
+    // must be rejected (MissingValidatorReceipt), never silently allowed.
+    const user3 = anchor.web3.Keypair.generate();
+    await airdrop(provider.connection, user3.publicKey, 2_000_000_000);
+    const [identityPda] = deriveIdentityPda(user3.publicKey, entrosAnchorProgId);
+    const [mintPda] = deriveMintPda(user3.publicKey, entrosAnchorProgId);
+    const ata = getAssociatedTokenAddressSync(
+      mintPda,
+      user3.publicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID,
+    );
+
+    try {
+      await program.methods
+        .mintAnchor(Array.from(commitment))
+        .accountsStrict({
+          user: user3.publicKey,
+          identityState: identityPda,
+          mint: mintPda,
+          mintAuthority: mintAuthorityPda,
+          tokenAccount: ata,
+          associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        // Deliberately no preInstructions → no preceding receipt.
+        .signers([user3])
+        .rpc();
+      expect.fail("mint without a validator receipt should be rejected");
+    } catch (err: any) {
+      expect(err).to.exist;
+    }
   });
 
   it("updates identity state with bound proof + auto-computed trust score", async () => {
@@ -471,7 +520,14 @@ describe("entros-anchor", () => {
         systemProgram: anchor.web3.SystemProgram.programId,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([
+        buildMintReceiptIx(
+          userB.publicKey,
+          Buffer.from(fixture.public_inputs[1]),
+        ),
+      ])
       .signers([userB])
       .rpc();
 
