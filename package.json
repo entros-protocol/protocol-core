@@ -11,8 +11,8 @@
     "cleanup-pdas": "node ./scripts/cleanup-pdas.ts"
   },
   "overrides": {
-    "serialize-javascript": ">=7.0.3",
-    "diff": ">=7.0.0",
+    "serialize-javascript": "^7.0.3",
+    "diff": "^8.0.0",
     "uuid": "^14.0.0",
     "js-yaml": "^4.2.0"
   },
