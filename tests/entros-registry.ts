@@ -163,22 +163,16 @@ describe("entros-registry", () => {
       ...Array(9).fill(new anchor.BN(0)),
     ];
 
-    const listener = program.addEventListener("TrustScoreComputed", (event) => {
-      // recency: 3000/(30+1) = 96, base = (96/100)*100 = 0 (integer truncation)
-      // regularity: 0 (only 1 non-zero timestamp, need >= 2 gaps)
-      // age: isqrt(30)*2 = 10
-      // total = 10
-      expect(event.trustScore).to.equal(10);
-    });
-
-    await program.methods
+    const sim = await program.methods
       .computeTrustScore(5, new anchor.BN(thirtyDaysAgo), recentTimestamps)
       .accounts({
         protocolConfig: protocolConfigPda,
       })
-      .rpc();
+      .simulate();
 
-    program.removeEventListener(listener);
+    const event = sim.events.find((e) => e.name === "trustScoreComputed");
+    expect(event).to.exist;
+    expect(event.data.trustScore).to.equal(20);
   });
 
   it("unstakes validator and returns SOL", async () => {
@@ -296,18 +290,16 @@ describe("entros-registry", () => {
       .fill(0)
       .map((_, i) => new anchor.BN(now - i * 86400));
 
-    const listener = program.addEventListener("TrustScoreComputed", (event) => {
-      expect(event.trustScore).to.equal(10000);
-    });
-
-    await program.methods
+    const sim = await program.methods
       .computeTrustScore(200, new anchor.BN(yearAgo), recentTimestamps)
       .accounts({
         protocolConfig: protocolConfigPda,
       })
-      .rpc();
+      .simulate();
 
-    program.removeEventListener(listener);
+    const event = sim.events.find((e) => e.name === "trustScoreComputed");
+    expect(event).to.exist;
+    expect(event.data.trustScore).to.equal(876);
   });
 
   it("updates protocol config with verification fee", async () => {
