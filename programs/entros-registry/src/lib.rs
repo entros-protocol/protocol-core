@@ -315,15 +315,29 @@ pub mod entros_registry {
         let config = &ctx.accounts.protocol_config;
         let now = Clock::get()?.unix_timestamp;
 
-        // 1. Recency-weighted verification count with continuous decay (14.4-minute resolution scaling)
-        let mut recency_score: u64 = 0;
-        for ts in recent_timestamps.iter() {
-            if *ts == 0 { continue; }
-            let elapsed_seconds = now.checked_sub(*ts).unwrap_or(0).max(0) as u64;
-            let days_since_scaled = (elapsed_seconds * 100) / 86400;
-            recency_score += 300_000 / (3000 + days_since_scaled);
+        let bin_size_secs: i64 = 604_800; // 7 days
+        let num_bins: usize = 12;
+
+        let mut active_bins = vec![false; num_bins];
+        for &ts in recent_timestamps.iter() {
+            if ts == 0 {
+                continue;
+            }
+            let elapsed = now.saturating_sub(ts);
+            let bin_idx = (elapsed / bin_size_secs) as usize;
+            if bin_idx < num_bins {
+                active_bins[bin_idx] = true;
+            }
         }
-        let base_score = (recency_score / 100) * u64::from(config.base_trust_increment);
+
+        let mut base_score: u64 = 0;
+        for (k, &active) in active_bins.iter().enumerate() {
+            if active {
+                let weight = u64::from(config.base_trust_increment)
+                    .saturating_mul((num_bins - k) as u64);
+                base_score = base_score.saturating_add(weight);
+            }
+        }
 
         // 2. Regularity bonus (deprecated, set to 0)
         let regularity_bonus: u64 = 0;
