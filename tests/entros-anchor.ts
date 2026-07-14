@@ -435,8 +435,8 @@ describe("entros-anchor", () => {
       );
     } catch (err: any) {
       expect(err).to.exist;
-      // PrevCommitmentMismatch is the expected error
-      expect(String(err)).to.match(/PrevCommitmentMismatch|6011/);
+      // PrevCommitmentMismatch or VerificationIntervalTooShort is the expected error
+      expect(String(err)).to.match(/PrevCommitmentMismatch|6011|VerificationIntervalTooShort|6025/);
     }
   });
 
@@ -671,6 +671,82 @@ describe("entros-anchor", () => {
     } catch (err: any) {
       expect(err).to.exist;
       expect(String(err)).to.match(/RebaselineCooldownActive|6013/);
+    }
+  });
+
+  it("fails to update anchor twice within the 1-hour interval", async () => {
+    const fixture = loadProofFixture();
+    const user = anchor.web3.Keypair.generate();
+    await airdrop(provider.connection, user.publicKey, 5_000_000_000);
+    const boot = await bootstrapVerifiedUser({
+      user,
+      entrosAnchor: program,
+      entrosVerifier,
+      fixture,
+      protocolConfigPda,
+      treasuryPda,
+      mintAuthorityPda,
+    });
+
+    const newCommitment1 = Buffer.from(fixture.public_inputs[0]);
+    const newCommitment2 = Buffer.alloc(32, 0xd2);
+    
+    // First update (successful)
+    const nonce1 = Array.from(anchor.web3.Keypair.generate().publicKey.toBytes());
+    const [verificationPda1] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("verification"), user.publicKey.toBuffer(), Buffer.from(nonce1)],
+      entrosVerifier.programId
+    );
+    const [challengePda1] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("challenge"), user.publicKey.toBuffer(), Buffer.from(nonce1)],
+      entrosVerifier.programId
+    );
+    await entrosVerifier.methods.createChallenge(nonce1).accountsStrict({ challenger: user.publicKey, challenge: challengePda1, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
+    await entrosVerifier.methods.verifyProof(Buffer.from(fixture.proof_bytes), fixture.public_inputs, nonce1).accountsStrict({ verifier: user.publicKey, challenge: challengePda1, verificationResult: verificationPda1, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
+
+    await program.methods
+      .updateAnchor(Array.from(newCommitment1), nonce1)
+      .accountsStrict({
+        authority: user.publicKey,
+        identityState: boot.identityPda,
+        verificationResult: verificationPda1,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    // Second update (fails due to 1-hour interval cooldown)
+    const nonce2 = Array.from(anchor.web3.Keypair.generate().publicKey.toBytes());
+    const [verificationPda2] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("verification"), user.publicKey.toBuffer(), Buffer.from(nonce2)],
+      entrosVerifier.programId
+    );
+    const [challengePda2] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("challenge"), user.publicKey.toBuffer(), Buffer.from(nonce2)],
+      entrosVerifier.programId
+    );
+    await entrosVerifier.methods.createChallenge(nonce2).accountsStrict({ challenger: user.publicKey, challenge: challengePda2, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
+    await entrosVerifier.methods.verifyProof(Buffer.from(fixture.proof_bytes), fixture.public_inputs, nonce2).accountsStrict({ verifier: user.publicKey, challenge: challengePda2, verificationResult: verificationPda2, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
+
+    try {
+      await program.methods
+        .updateAnchor(Array.from(newCommitment2), nonce2)
+        .accountsStrict({
+          authority: user.publicKey,
+          identityState: boot.identityPda,
+          verificationResult: verificationPda2,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+      expect.fail("Should have failed due to verification interval too short");
+    } catch (err: any) {
+      expect(err).to.exist;
+      expect(String(err)).to.match(/VerificationIntervalTooShort|6025/);
     }
   });
 });

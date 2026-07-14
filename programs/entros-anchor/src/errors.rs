@@ -52,4 +52,6 @@ pub enum EntrosAnchorError {
     IdentityStateNotFound,
     #[msg("ProtocolConfig.validator_pubkey is unset (all-zero); minting is disabled until a validator is configured")]
     ValidatorNotConfigured,
+    #[msg("Verification interval too short: must wait at least 1 hour between verifications")]
+    VerificationIntervalTooShort,
 }

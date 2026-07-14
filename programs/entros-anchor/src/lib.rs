@@ -54,6 +54,15 @@ const RESET_COOLDOWN_SECS: i64 = 604_800;
 /// Minimum seconds between `rebaseline_anchor` calls on the same identity. 7 days.
 const REBASELINE_COOLDOWN_SECS: i64 = 604_800;
 
+/// Minimum seconds between verification updates. 1 hour.
+const MIN_VERIFICATION_INTERVAL_SECS: i64 = 3600;
+
+/// Size of each activity bin in seconds. 7 days.
+const BIN_SIZE_SECS: i64 = 604_800;
+
+/// Number of weekly activity bins tracked in the scoring window.
+const NUM_BINS: usize = 12;
+
 /// Post-patch size of the entros-verifier `VerificationResult` account.
 /// Enforced as a length check in update_anchor — accounts created before the
 /// 2026-04-20 binding patch have the smaller legacy layout (114 bytes) and
@@ -862,6 +871,15 @@ pub mod entros_anchor {
             EntrosAnchorError::Unauthorized
         );
 
+        // Enforce minimum verification interval (early check to prevent spam compute)
+        if identity.last_verification_timestamp > 0 && identity.verification_count > 0 {
+            let elapsed = now.saturating_sub(identity.last_verification_timestamp);
+            require!(
+                elapsed >= MIN_VERIFICATION_INTERVAL_SECS,
+                EntrosAnchorError::VerificationIntervalTooShort
+            );
+        }
+
         // Cross-program validation of the VerificationResult PDA.
         //
         // The account is passed as UncheckedAccount because Anchor's
@@ -972,46 +990,30 @@ pub mod entros_anchor {
         ]);
         drop(config_data);
 
-        // Deduplicate timestamps by rolling 24-hour window. Two verifications
-        // share a bucket iff they share the same `days_since = floor((now - ts)
-        // / 86400)` — i.e., they fell inside the same 24-hour slice counted
-        // back from `now`. Newest-first iteration means same-bucket entries
-        // are adjacent and collapse to the first occurrence.
-        //
-        // This is a sliding-window rule, not a UTC-calendar rule — it's
-        // timezone-neutral (Solana timestamps carry no TZ) but means two
-        // verifications on different UTC calendar dates that happen to fall
-        // inside the same 24h slice are treated as the same activity day.
-        // The design discourages within-24h burst verification (repeat
-        // attempts under the window don't compound recency) while rewarding
-        // consistent spacing over time — consistency over volume.
-        let mut unique_ts = [0i64; 52];
-        let mut unique_count: usize = 0;
-        let mut prev_day: i64 = -1;
-        for ts in identity.recent_timestamps.iter() {
-            if *ts == 0 {
+        // Weekly Bin Activation model (removes daily-farming incentives and rewards span over frequency)
+        // Divide the past 84 days (12 weeks) into 12 bins of 7 days each.
+        // A bin is active if there is at least one verification timestamp inside its range.
+        let mut active_bins = [false; NUM_BINS];
+        for &ts in identity.recent_timestamps.iter() {
+            if ts == 0 {
                 continue;
             }
-            let days_since = ((now - ts) / 86400).max(0);
-            if days_since != prev_day {
-                unique_ts[unique_count] = *ts;
-                unique_count += 1;
-                prev_day = days_since;
+            let elapsed = now.saturating_sub(ts);
+            let bin_idx = (elapsed / BIN_SIZE_SECS) as usize;
+            if bin_idx < NUM_BINS {
+                active_bins[bin_idx] = true;
             }
         }
-        // recent_timestamps is shifted newest-first in update_anchor, so
-        // unique_ts inherits that order. The gap loop below relies on it to
-        // produce non-negative day counts.
-        debug_assert!(unique_ts[..unique_count].windows(2).all(|w| w[0] >= w[1]),);
 
-        // Recency-weighted score with continuous decay (14.4-minute resolution day scaling)
-        let mut recency_score: u64 = 0;
-        for i in 0..unique_count {
-            let elapsed_seconds = now.checked_sub(unique_ts[i]).unwrap_or(0).max(0) as u64;
-            let days_since_scaled = (elapsed_seconds * 100) / 86400;
-            recency_score += 300_000 / (3000 + days_since_scaled);
+        let mut base_score: u64 = 0;
+        for (k, &active) in active_bins.iter().enumerate() {
+            if active {
+                // Weight(k) = base_trust_increment * (12 - k)
+                let weight = u64::from(base_trust_increment)
+                    .saturating_mul((NUM_BINS - k) as u64);
+                base_score = base_score.saturating_add(weight);
+            }
         }
-        let base_score = (recency_score * u64::from(base_trust_increment)) / 100;
 
         // Deprecated regularity bonus (farming mitigation: regularity score is set to 0)
         let regularity_bonus: u64 = 0;
