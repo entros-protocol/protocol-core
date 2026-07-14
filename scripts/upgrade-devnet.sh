@@ -4,8 +4,8 @@ set -e
 # Change directory to protocol-core root if running from elsewhere
 cd "$(dirname "$0")/.."
 
-echo "Building programs in release mode..."
-anchor build --options.release
+echo "Building programs..."
+anchor build
 
 echo "Upgrading entros-anchor program..."
 solana program deploy -u devnet --program-id GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2 target/deploy/entros_anchor.so
