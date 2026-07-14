@@ -28,6 +28,8 @@ pub enum EntrosAnchorError {
     PrevCommitmentMismatch,
     #[msg("Reset cooldown has not elapsed since the last reset")]
     ResetCooldownActive,
+    #[msg("Rebaseline cooldown has not elapsed since the last rebaseline")]
+    RebaselineCooldownActive,
     #[msg("caller is not authorized by the old identity")]
     UnauthorizedNewWallet,
     #[msg("VerificationResult.verified_at is in the future relative to the cluster clock")]

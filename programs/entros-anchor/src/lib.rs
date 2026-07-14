@@ -49,11 +49,10 @@ const VERIFIER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 /// relayer latency without allowing stale proofs to sit indefinitely.
 const MAX_PROOF_AGE_SECS: i64 = 600;
 
-/// Minimum seconds between `reset_identity_state` calls on the same
-/// identity. 7 days. Raises attacker time-cost after wallet compromise
-/// and bounds legitimate reset frequency to something close to a weekly
-/// review cadence. Upgradeable via program redeploy if abuse is observed.
 const RESET_COOLDOWN_SECS: i64 = 604_800;
+
+/// Minimum seconds between `rebaseline_anchor` calls on the same identity. 7 days.
+const REBASELINE_COOLDOWN_SECS: i64 = 604_800;
 
 /// Post-patch size of the entros-verifier `VerificationResult` account.
 /// Enforced as a length check in update_anchor — accounts created before the
@@ -472,6 +471,8 @@ pub mod entros_anchor {
         identity.mint = ctx.accounts.mint.key();
         identity.bump = ctx.bumps.identity_state;
         identity.recent_timestamps = [0i64; 52];
+        identity.projection_version = 0;
+        identity.last_rebaseline_timestamp = 0;
 
         // Read verification fee from protocol config (cross-program, entros-registry).
         // The accounts struct constrains the PDA address via seeds::program,
@@ -1086,6 +1087,7 @@ pub mod entros_anchor {
     pub fn reset_identity_state(
         ctx: Context<ResetIdentityState>,
         new_commitment: [u8; 32],
+        projection_version: u16,
     ) -> Result<()> {
         require!(
             new_commitment != [0u8; 32],
@@ -1175,6 +1177,7 @@ pub mod entros_anchor {
         identity.recent_timestamps = [0i64; 52];
         identity.last_verification_timestamp = now;
         identity.last_reset_timestamp = now;
+        identity.projection_version = projection_version;
 
         let mut data = identity_info.try_borrow_mut_data()?;
         identity
@@ -1241,6 +1244,139 @@ pub mod entros_anchor {
 
         emit!(EncryptedBaselineSet {
             owner: ctx.accounts.authority.key(),
+        });
+
+        Ok(())
+    }
+
+    /// Rebaseline the user's commitment to the new version projection space.
+    /// Skips the cross-space Hamming proof. Verification is performed via a
+    /// validator-signed humanness receipt for the new-version commitment.
+    pub fn rebaseline_anchor(
+        ctx: Context<RebaselineAnchor>,
+        new_commitment: [u8; 32],
+        projection_version: u16,
+    ) -> Result<()> {
+        require!(
+            new_commitment != [0u8; 32],
+            EntrosAnchorError::InvalidCommitment
+        );
+
+        let identity_info = &ctx.accounts.identity_state;
+        require!(
+            identity_info.owner == &crate::ID,
+            EntrosAnchorError::InvalidIdentityState
+        );
+        let now = Clock::get()?.unix_timestamp;
+        let new_len = IdentityState::LEN;
+
+        // Realloc legacy layout PDA if needed
+        let current_len = identity_info.data_len();
+        if current_len < new_len {
+            identity_info.realloc(new_len, true)?;
+            let rent = Rent::get()?;
+            let required = rent.minimum_balance(new_len);
+            let current_lamports = identity_info.lamports();
+            if required > current_lamports {
+                system_program::transfer(
+                    CpiContext::new(
+                        ctx.accounts.system_program.to_account_info(),
+                        system_program::Transfer {
+                            from: ctx.accounts.authority.to_account_info(),
+                            to: identity_info.to_account_info(),
+                        },
+                    ),
+                    required - current_lamports,
+                )?;
+            }
+        }
+
+        let mut identity = {
+            let data = identity_info.try_borrow_data()?;
+            IdentityState::try_deserialize(&mut &data[..])
+                .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?
+        };
+
+        require!(
+            identity.owner == ctx.accounts.authority.key(),
+            EntrosAnchorError::Unauthorized
+        );
+
+        // Verify cooldown
+        let elapsed = now.saturating_sub(identity.last_rebaseline_timestamp);
+        require!(
+            elapsed >= REBASELINE_COOLDOWN_SECS,
+            EntrosAnchorError::RebaselineCooldownActive
+        );
+
+        // Read config parameters
+        require!(
+            ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
+            EntrosAnchorError::InvalidProtocolConfig
+        );
+        let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
+        let verification_fee = if config_data.len() >= 69 {
+            u64::from_le_bytes([
+                config_data[61],
+                config_data[62],
+                config_data[63],
+                config_data[64],
+                config_data[65],
+                config_data[66],
+                config_data[67],
+                config_data[68],
+            ])
+        } else {
+            0
+        };
+        let mut validator_pubkey = [0u8; 32];
+        if config_data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
+            validator_pubkey.copy_from_slice(
+                &config_data[PC_OFFSET_VALIDATOR_PUBKEY..PC_OFFSET_VALIDATOR_PUBKEY + 32],
+            );
+        }
+        drop(config_data);
+
+        // Verify validator-signed receipt
+        verify_mint_receipt(
+            &ctx.accounts.instructions_sysvar,
+            &validator_pubkey,
+            &ctx.accounts.authority.key(),
+            &new_commitment,
+            now,
+        )?;
+
+        // Update state
+        identity.current_commitment = new_commitment;
+        identity.projection_version = projection_version;
+        identity.last_rebaseline_timestamp = now;
+        identity.last_verification_timestamp = now;
+
+        // Save state
+        let mut data = identity_info.try_borrow_mut_data()?;
+        identity
+            .try_serialize(&mut *data)
+            .map_err(|_| error!(EntrosAnchorError::IdentitySerializationFailed))?;
+        drop(data);
+
+        // Transfer verification fee
+        if verification_fee > 0 {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.authority.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                    },
+                ),
+                verification_fee,
+            )?;
+        }
+
+        emit!(AnchorRebaselined {
+            owner: identity.owner,
+            commitment: new_commitment,
+            projection_version,
         });
 
         Ok(())
@@ -1530,6 +1666,47 @@ pub struct SetEncryptedBaseline<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct RebaselineAnchor<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: IdentityState PDA. UncheckedAccount because it may realloc
+    /// legacy-layout accounts to the new layout before deserialization.
+    /// PDA validated by seeds; ownership verified in instruction body after deserialization.
+    #[account(
+        mut,
+        seeds = [b"identity", authority.key().as_ref()],
+        bump,
+    )]
+    pub identity_state: UncheckedAccount<'info>,
+
+    /// CHECK: Cross-program read of entros-registry ProtocolConfig PDA.
+    /// Supplies the verification fee amount charged on rebaseline.
+    #[account(
+        seeds = [b"protocol_config"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    /// CHECK: Protocol treasury PDA on entros-registry. Receives the verification fee.
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub treasury: UncheckedAccount<'info>,
+
+    /// CHECK: Solana instructions sysvar. Required to verify the preceding
+    /// Ed25519Program::verify instruction containing the validator-signed receipt.
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::id())]
+    pub instructions_sysvar: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // --- Events ---
 
 #[event]
@@ -1563,4 +1740,11 @@ pub struct AnchorReset {
 #[event]
 pub struct EncryptedBaselineSet {
     pub owner: Pubkey,
+}
+
+#[event]
+pub struct AnchorRebaselined {
+    pub owner: Pubkey,
+    pub commitment: [u8; 32],
+    pub projection_version: u16,
 }

@@ -612,4 +612,65 @@ describe("entros-anchor", () => {
     // is removed pending multi-fixture support.
     expect(trustScore1vrf).to.be.greaterThan(0);
   });
+
+  it("rebaselines the identity to a new projection version", async () => {
+    const user = provider.wallet;
+    const [identityPda] = deriveIdentityPda(user.publicKey, entrosAnchorProgId);
+    
+    // Fetch identity before rebaseline
+    const identityBefore = await program.account.identityState.fetch(identityPda);
+    expect(identityBefore.projectionVersion).to.equal(0);
+    expect(identityBefore.lastRebaselineTimestamp.toNumber()).to.equal(0);
+    
+    const newCommitment = Buffer.alloc(32, 0xbb);
+    const newVersion = 3;
+
+    await program.methods
+      .rebaselineAnchor(Array.from(newCommitment), newVersion)
+      .accountsStrict({
+        authority: user.publicKey,
+        identityState: identityPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .preInstructions([buildMintReceiptIx(user.publicKey, newCommitment)])
+      .rpc();
+
+    // Fetch identity after rebaseline
+    const identityAfter = await program.account.identityState.fetch(identityPda);
+    expect(identityAfter.projectionVersion).to.equal(newVersion);
+    expect(identityAfter.lastRebaselineTimestamp.toNumber()).to.be.greaterThan(0);
+    expect(Buffer.from(identityAfter.currentCommitment)).to.deep.equal(newCommitment);
+    // Reputation should be preserved
+    expect(identityAfter.trustScore).to.equal(identityBefore.trustScore);
+    expect(identityAfter.verificationCount).to.equal(identityBefore.verificationCount);
+  });
+
+  it("fails to rebaseline before cooldown elapses", async () => {
+    const user = provider.wallet;
+    const [identityPda] = deriveIdentityPda(user.publicKey, entrosAnchorProgId);
+    const newCommitment = Buffer.alloc(32, 0xcc);
+    const newVersion = 4;
+
+    try {
+      await program.methods
+        .rebaselineAnchor(Array.from(newCommitment), newVersion)
+        .accountsStrict({
+          authority: user.publicKey,
+          identityState: identityPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .preInstructions([buildMintReceiptIx(user.publicKey, newCommitment)])
+        .rpc();
+      expect.fail("Should have failed due to rebaseline cooldown active");
+    } catch (err: any) {
+      expect(err).to.exist;
+      expect(String(err)).to.match(/RebaselineCooldownActive|6013/);
+    }
+  });
 });

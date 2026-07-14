@@ -28,6 +28,10 @@ pub struct IdentityState {
     pub last_reset_timestamp: i64,
     /// new wallet for migrate_identity()
     pub new_wallet: Pubkey,
+    /// Version of the fingerprint projection space used for the current_commitment (master-list #192)
+    pub projection_version: u16,
+    /// Most recent `rebaseline_anchor` invocation
+    pub last_rebaseline_timestamp: i64,
 }
 
 impl IdentityState {
@@ -42,11 +46,16 @@ impl IdentityState {
         + 1   // bump
         + 416 // recent_timestamps (52 × 8 bytes)
         + 8   // last_reset_timestamp
-        + 32; // new_wallet
+        + 32  // new_wallet
+        + 2   // projection_version
+        + 8;  // last_rebaseline_timestamp
 
     /// Pre-reset layout size. Used by `reset_identity_state` to detect legacy
     /// accounts that need realloc before the new field can be written.
     pub const LEN_PRE_RESET: usize = 543;
+
+    /// Layout size before rebaselining fields were added.
+    pub const LEN_PRE_REBASELINE: usize = 575;
 }
 
 /// Wallet-keyed encrypted baseline blob, stored at PDA seeds
