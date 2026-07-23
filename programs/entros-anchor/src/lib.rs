@@ -1005,12 +1005,21 @@ pub mod entros_anchor {
             }
         }
 
+        // Recency-weighted span score, normalized to base_trust_increment.
+        // Weight(k) = base_trust_increment * (NUM_BINS - k) / NUM_BINS, so the
+        // most-recent active week contributes exactly base_trust_increment and a
+        // single fresh verification scores ~base (preserving the pre-weekly-bin
+        // scale), older weeks decay linearly, and sustained span across all
+        // NUM_BINS weeks tops out near base * 6.5. This keeps the anti-farming
+        // "span over frequency" model (A2) without the unintended ~NUM_BINS-x
+        // rescale the un-normalized (NUM_BINS - k) weight produced. See
+        // BLUEPRINT-trust-score-farming-resistance.md §4/§10.
         let mut base_score: u64 = 0;
         for (k, &active) in active_bins.iter().enumerate() {
             if active {
-                // Weight(k) = base_trust_increment * (12 - k)
                 let weight = u64::from(base_trust_increment)
-                    .saturating_mul((NUM_BINS - k) as u64);
+                    .saturating_mul((NUM_BINS - k) as u64)
+                    / (NUM_BINS as u64);
                 base_score = base_score.saturating_add(weight);
             }
         }

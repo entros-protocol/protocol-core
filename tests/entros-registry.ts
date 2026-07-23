@@ -172,7 +172,7 @@ describe("entros-registry", () => {
 
     const event = sim.events.find((e) => e.name === "trustScoreComputed");
     expect(event).to.exist;
-    expect(event.data.trustScore).to.equal(1220);
+    expect(event.data.trustScore).to.equal(120);
   });
 
   it("unstakes validator and returns SOL", async () => {
@@ -299,7 +299,7 @@ describe("entros-registry", () => {
 
     const event = sim.events.find((e) => e.name === "trustScoreComputed");
     expect(event).to.exist;
-    expect(event.data.trustScore).to.equal(2376);
+    expect(event.data.trustScore).to.equal(267);
   });
 
   it("updates protocol config with verification fee", async () => {

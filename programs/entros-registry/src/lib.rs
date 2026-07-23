@@ -330,11 +330,16 @@ pub mod entros_registry {
             }
         }
 
+        // Normalized to base_trust_increment so the most-recent active week
+        // contributes exactly base_trust_increment (preserving the pre-weekly-bin
+        // scale), matching entros-anchor::update_anchor. Keeps the "span over
+        // frequency" model without the unintended ~num_bins-x rescale.
         let mut base_score: u64 = 0;
         for (k, &active) in active_bins.iter().enumerate() {
             if active {
                 let weight = u64::from(config.base_trust_increment)
-                    .saturating_mul((num_bins - k) as u64);
+                    .saturating_mul((num_bins - k) as u64)
+                    / (num_bins as u64);
                 base_score = base_score.saturating_add(weight);
             }
         }
