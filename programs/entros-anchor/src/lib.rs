@@ -54,14 +54,37 @@ const RESET_COOLDOWN_SECS: i64 = 604_800;
 /// Minimum seconds between `rebaseline_anchor` calls on the same identity. 7 days.
 const REBASELINE_COOLDOWN_SECS: i64 = 604_800;
 
-/// Minimum seconds between verification updates. 1 hour.
-const MIN_VERIFICATION_INTERVAL_SECS: i64 = 3600;
-
 /// Size of each activity bin in seconds. 7 days.
 const BIN_SIZE_SECS: i64 = 604_800;
 
 /// Number of weekly activity bins tracked in the scoring window.
 const NUM_BINS: usize = 12;
+
+/// Record a verification in the activity ring, keeping one entry per bin.
+///
+/// The Trust Score reads bin *activation*, never a count, so a second entry
+/// inside a bin that is already active adds nothing to the score and evicts a
+/// week of span from the far end of the ring. Gating the write on bin
+/// boundaries makes the 52 slots cover a full year, which is what the field's
+/// own doc comment claims, no matter how often a wallet verifies.
+///
+/// That property is what lets an integrator ask for a live verification at the
+/// point of a gated action: a user passing several gates in a day keeps their
+/// history intact.
+///
+/// `last_verification_timestamp` and `verification_count` are written on every
+/// verification, so recency and totals lose no fidelity here.
+fn record_verification(ring: &mut [i64; 52], now: i64) {
+    let opens_new_bin =
+        ring[0] == 0 || now.saturating_sub(ring[0]) >= BIN_SIZE_SECS;
+    if !opens_new_bin {
+        return;
+    }
+    for i in (1..ring.len()).rev() {
+        ring[i] = ring[i - 1];
+    }
+    ring[0] = now;
+}
 
 /// Post-patch size of the entros-verifier `VerificationResult` account.
 /// Enforced as a length check in update_anchor — accounts created before the
@@ -871,15 +894,6 @@ pub mod entros_anchor {
             EntrosAnchorError::Unauthorized
         );
 
-        // Enforce minimum verification interval (early check to prevent spam compute)
-        if identity.last_verification_timestamp > 0 && identity.verification_count > 0 {
-            let elapsed = now.saturating_sub(identity.last_verification_timestamp);
-            require!(
-                elapsed >= MIN_VERIFICATION_INTERVAL_SECS,
-                EntrosAnchorError::VerificationIntervalTooShort
-            );
-        }
-
         // Cross-program validation of the VerificationResult PDA.
         //
         // The account is passed as UncheckedAccount because Anchor's
@@ -959,11 +973,7 @@ pub mod entros_anchor {
             .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
         identity.last_verification_timestamp = now;
 
-        // Shift recent_timestamps array: drop oldest, prepend newest
-        for i in (1..52).rev() {
-            identity.recent_timestamps[i] = identity.recent_timestamps[i - 1];
-        }
-        identity.recent_timestamps[0] = now;
+        record_verification(&mut identity.recent_timestamps, now);
 
         // Read protocol config (cross-program, entros-registry)
         // Layout: 8 disc + 32 admin + 8 min_stake + 8 challenge_expiry = offset 56
@@ -1758,4 +1768,65 @@ pub struct AnchorRebaselined {
     pub owner: Pubkey,
     pub commitment: [u8; 32],
     pub projection_version: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{record_verification, BIN_SIZE_SECS};
+
+    const T0: i64 = 1_700_000_000;
+
+    #[test]
+    fn first_verification_fills_the_newest_slot() {
+        let mut ring = [0i64; 52];
+        record_verification(&mut ring, T0);
+        assert_eq!(ring[0], T0);
+        assert_eq!(ring[1], 0);
+    }
+
+    #[test]
+    fn a_second_verification_in_the_same_bin_evicts_nothing() {
+        // The case that made this function necessary. Passing several
+        // integrator gates in a day must not cost a wallet its span.
+        let mut ring = [0i64; 52];
+        record_verification(&mut ring, T0);
+        for offset in [1, 60, 3_600, BIN_SIZE_SECS - 1] {
+            record_verification(&mut ring, T0 + offset);
+        }
+        assert_eq!(ring[0], T0, "the newest entry must not move");
+        assert_eq!(ring[1], 0, "nothing may be shifted out");
+    }
+
+    #[test]
+    fn crossing_a_bin_boundary_prepends() {
+        let mut ring = [0i64; 52];
+        record_verification(&mut ring, T0);
+        record_verification(&mut ring, T0 + BIN_SIZE_SECS);
+        assert_eq!(ring[0], T0 + BIN_SIZE_SECS);
+        assert_eq!(ring[1], T0);
+    }
+
+    #[test]
+    fn the_ring_holds_a_year_of_weekly_entries_before_it_rolls() {
+        let mut ring = [0i64; 52];
+        for week in 0..52 {
+            record_verification(&mut ring, T0 + week * BIN_SIZE_SECS);
+        }
+        assert_eq!(ring[0], T0 + 51 * BIN_SIZE_SECS);
+        assert_eq!(ring[51], T0, "the first entry survives a full year");
+
+        record_verification(&mut ring, T0 + 52 * BIN_SIZE_SECS);
+        assert_eq!(ring[51], T0 + BIN_SIZE_SECS, "the oldest rolls off");
+    }
+
+    #[test]
+    fn a_clock_that_goes_backwards_does_not_evict() {
+        // `saturating_sub` yields 0 for a past timestamp, which is below the
+        // bin size, so the entry is refused rather than shifting the ring.
+        let mut ring = [0i64; 52];
+        record_verification(&mut ring, T0);
+        record_verification(&mut ring, T0 - BIN_SIZE_SECS * 2);
+        assert_eq!(ring[0], T0);
+        assert_eq!(ring[1], 0);
+    }
 }
