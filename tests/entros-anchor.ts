@@ -435,8 +435,9 @@ describe("entros-anchor", () => {
       );
     } catch (err: any) {
       expect(err).to.exist;
-      // PrevCommitmentMismatch or VerificationIntervalTooShort is the expected error
-      expect(String(err)).to.match(/PrevCommitmentMismatch|6011|VerificationIntervalTooShort|6025/);
+      // The VerificationResult was already consumed, so its commitment_prev no
+      // longer matches the identity's head.
+      expect(String(err)).to.match(/PrevCommitmentMismatch|6011/);
     }
   });
 
@@ -674,7 +675,7 @@ describe("entros-anchor", () => {
     }
   });
 
-  it("fails to update anchor twice within the 1-hour interval", async () => {
+  it("rejects a replayed VerificationResult whose commitment_prev is stale", async () => {
     const fixture = loadProofFixture();
     const user = anchor.web3.Keypair.generate();
     await airdrop(provider.connection, user.publicKey, 5_000_000_000);
@@ -717,7 +718,9 @@ describe("entros-anchor", () => {
       .signers([user])
       .rpc();
 
-    // Second update (fails due to 1-hour interval cooldown)
+    // Second update. Nothing rate limits verifications on chain, so this
+    // reaches the commitment check and fails there: the fixture is replayed,
+    // so its commitment_prev still points at the pre-first-update head.
     const nonce2 = Array.from(anchor.web3.Keypair.generate().publicKey.toBytes());
     const [verificationPda2] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("verification"), user.publicKey.toBuffer(), Buffer.from(nonce2)],
@@ -743,10 +746,10 @@ describe("entros-anchor", () => {
         })
         .signers([user])
         .rpc();
-      expect.fail("Should have failed due to verification interval too short");
+      expect.fail("Should have failed on a stale commitment_prev");
     } catch (err: any) {
       expect(err).to.exist;
-      expect(String(err)).to.match(/VerificationIntervalTooShort|6025/);
+      expect(String(err)).to.match(/PrevCommitmentMismatch|6011/);
     }
   });
 });
