@@ -18,9 +18,10 @@ pub struct IdentityState {
     pub mint: Pubkey,
     /// PDA bump seed
     pub bump: u8,
-    /// Timestamps of last 52 verifications (newest at index 0).
-    /// 52 slots covers 1 year of weekly or 4+ years of monthly verifications.
-    /// Older entries contribute negligible score due to exponential recency decay.
+    /// Activity ring, newest at index 0, holding at most one entry per weekly
+    /// scoring bin. The Trust Score reads bin activation rather than a count,
+    /// so a repeat inside an active bin is not recorded and 52 slots cover a
+    /// full year however often a wallet verifies. See `record_verification`.
     pub recent_timestamps: [i64; 52],
     /// Most recent `reset_identity_state` invocation. Zero when the identity
     /// has never been reset (including freshly minted accounts and accounts
@@ -54,8 +55,10 @@ impl IdentityState {
     /// accounts that need realloc before the new field can be written.
     pub const LEN_PRE_RESET: usize = 543;
 
-    /// Layout size before rebaselining fields were added.
-    pub const LEN_PRE_REBASELINE: usize = 575;
+    /// Layout size before `projection_version` and `last_rebaseline_timestamp`
+    /// were appended. Every growth of this account has been a pure append, so
+    /// the prefix boundaries are 543, 551, 583 and the current `LEN` of 593.
+    pub const LEN_PRE_REBASELINE: usize = 583;
 }
 
 /// Wallet-keyed encrypted baseline blob, stored at PDA seeds
