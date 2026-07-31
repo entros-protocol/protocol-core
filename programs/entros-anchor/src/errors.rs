@@ -52,6 +52,12 @@ pub enum EntrosAnchorError {
     IdentityStateNotFound,
     #[msg("ProtocolConfig.validator_pubkey is unset (all-zero); minting is disabled until a validator is configured")]
     ValidatorNotConfigured,
-    #[msg("Verification interval too short: must wait at least 1 hour between verifications")]
+    /// Retired. `update_anchor` enforced a one-hour floor between
+    /// verifications until it was removed: the Trust Score already scores
+    /// weekly bin activation rather than frequency, and the floor blocked an
+    /// integrator asking for a live verification at the point of a gated
+    /// action. The variant stays so every discriminant after it keeps its
+    /// number.
+    #[msg("Retired. Verifications are no longer rate limited on chain.")]
     VerificationIntervalTooShort,
 }
