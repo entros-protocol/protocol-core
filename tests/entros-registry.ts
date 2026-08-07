@@ -171,7 +171,9 @@ describe("entros-registry", () => {
       .simulate();
 
     const event = sim.events.find((e) => e.name === "trustScoreComputed");
-    expect(event).to.exist;
+    if (!event) {
+      throw new Error("trustScoreComputed event was not emitted");
+    }
     expect(event.data.trustScore).to.equal(120);
   });
 
@@ -298,7 +300,9 @@ describe("entros-registry", () => {
       .simulate();
 
     const event = sim.events.find((e) => e.name === "trustScoreComputed");
-    expect(event).to.exist;
+    if (!event) {
+      throw new Error("trustScoreComputed event was not emitted");
+    }
     expect(event.data.trustScore).to.equal(267);
   });
 

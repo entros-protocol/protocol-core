@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 // Byte offsets into the raw account data (8-byte Anchor discriminator first).
 // Challenge:           [disc 8][challenger 32][nonce 32][created_at 8][expires_at 8][used 1][bump 1]
@@ -41,10 +41,7 @@ async function main(): Promise<void> {
     );
   }
 
-  // Resolve the IDL relative to this file (ESM: no __dirname under `node`).
-  const idlPath = fileURLToPath(
-    new URL("../target/idl/entros_verifier.json", import.meta.url),
-  );
+  const idlPath = resolve(__dirname, "../target/idl/entros_verifier.json");
   const idl = JSON.parse(readFileSync(idlPath, "utf8")) as anchor.Idl;
   const program = new anchor.Program(idl, provider);
   const verifierProgramId = program.programId;
