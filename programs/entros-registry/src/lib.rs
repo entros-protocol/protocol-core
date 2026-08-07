@@ -1,4 +1,5 @@
 #![deny(clippy::all)]
+#![allow(unexpected_cfgs)] // Anchor emits SBF-only cfg values during host builds.
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
@@ -12,7 +13,9 @@ use state::{ProtocolConfig, ValidatorState};
 
 /// Integer square root via Newton's method (deterministic, no floating point).
 fn isqrt(n: u64) -> u64 {
-    if n == 0 { return 0; }
+    if n == 0 {
+        return 0;
+    }
     let mut x = n;
     let mut y = x.div_ceil(2);
     while y < x {
@@ -153,8 +156,7 @@ pub mod entros_registry {
 
         // Write validator_pubkey at its canonical offset.
         let mut data = config_info.try_borrow_mut_data()?;
-        data[ProtocolConfig::OFFSET_VALIDATOR_PUBKEY
-            ..ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32]
+        data[ProtocolConfig::OFFSET_VALIDATOR_PUBKEY..ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32]
             .copy_from_slice(validator_pubkey.as_ref());
         drop(data);
 
@@ -209,7 +211,10 @@ pub mod entros_registry {
         let programdata_info = &ctx.accounts.programdata;
         let programdata_data = programdata_info.try_borrow_data()?;
         // Programdata layout: 4 bytes (state enum) + 8 bytes (slot) + 1 byte (option tag) + 32 bytes (authority)
-        require!(programdata_data.len() >= 45, RegistryError::ProgramDataBytes);
+        require!(
+            programdata_data.len() >= 45,
+            RegistryError::ProgramDataBytes
+        );
         require!(programdata_data[12] == 1, RegistryError::ProgramDataBytes); // option tag: Some
         let authority_bytes = &programdata_data[13..45];
         let upgrade_authority = Pubkey::try_from(authority_bytes)

@@ -1,4 +1,5 @@
 #![deny(clippy::all)]
+#![allow(unexpected_cfgs)] // Anchor emits SBF-only cfg values during host builds.
 
 use anchor_lang::prelude::*;
 use solana_security_txt::security_txt;
@@ -93,12 +94,24 @@ pub mod entros_verifier {
         // values, so we bound the circuit parameters here to prevent malicious
         // thresholds that would defeat the anti-replay and distance properties.
         require!(public_inputs.len() == 4, VerifierError::InvalidPublicInputs);
-        require!(public_inputs[0] != [0u8; 32], VerifierError::InvalidPublicInputs);
-        require!(public_inputs[1] != [0u8; 32], VerifierError::InvalidPublicInputs);
+        require!(
+            public_inputs[0] != [0u8; 32],
+            VerifierError::InvalidPublicInputs
+        );
+        require!(
+            public_inputs[1] != [0u8; 32],
+            VerifierError::InvalidPublicInputs
+        );
         let threshold = decode_u16_from_field_element(&public_inputs[2])?;
         let min_distance = decode_u16_from_field_element(&public_inputs[3])?;
-        require!(threshold <= MAX_THRESHOLD, VerifierError::InvalidPublicInputs);
-        require!(min_distance >= MIN_DISTANCE_FLOOR, VerifierError::InvalidPublicInputs);
+        require!(
+            threshold <= MAX_THRESHOLD,
+            VerifierError::InvalidPublicInputs
+        );
+        require!(
+            min_distance >= MIN_DISTANCE_FLOOR,
+            VerifierError::InvalidPublicInputs
+        );
 
         // Run Groth16 verification — reverts the entire transaction on invalid proof
         groth16_verifier::verify_proof(&proof_bytes, &public_inputs)?;

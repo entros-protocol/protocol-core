@@ -1,4 +1,5 @@
 #![deny(clippy::all)]
+#![allow(unexpected_cfgs)] // Anchor emits SBF-only cfg values during host builds.
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
@@ -77,8 +78,7 @@ const NUM_BINS: usize = 12;
 /// `last_verification_timestamp` and `verification_count` are written on every
 /// verification, so recency and totals lose no fidelity here.
 fn record_verification(ring: &mut [i64; 52], now: i64) {
-    let opens_new_bin =
-        ring[0] == 0 || now.saturating_sub(ring[0]) >= BIN_SIZE_SECS;
+    let opens_new_bin = ring[0] == 0 || now.saturating_sub(ring[0]) >= BIN_SIZE_SECS;
     if !opens_new_bin {
         return;
     }
@@ -1029,8 +1029,7 @@ pub mod entros_anchor {
         let mut base_score: u64 = 0;
         for (k, &active) in active_bins.iter().enumerate() {
             if active {
-                let weight = u64::from(base_trust_increment)
-                    .saturating_mul((NUM_BINS - k) as u64)
+                let weight = u64::from(base_trust_increment).saturating_mul((NUM_BINS - k) as u64)
                     / (NUM_BINS as u64);
                 base_score = base_score.saturating_add(weight);
             }
