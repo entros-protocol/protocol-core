@@ -132,7 +132,7 @@ pub mod entros_registry {
         let new_len = ProtocolConfig::LEN;
         let current_len = config_info.data_len();
         if current_len < new_len {
-            config_info.realloc(new_len, true)?;
+            config_info.resize(new_len)?;
 
             let rent = Rent::get()?;
             let required = rent.minimum_balance(new_len);
@@ -231,7 +231,7 @@ pub mod entros_registry {
 
         // Realloc the account to the new size (zeros new bytes automatically)
         let new_len = ProtocolConfig::LEN;
-        config_info.realloc(new_len, true)?;
+        config_info.resize(new_len)?;
 
         // Write the new admin pubkey at offset 8
         let mut data = config_info.try_borrow_mut_data()?;

@@ -864,7 +864,7 @@ pub mod entros_anchor {
         // Migrate: resize old accounts (207 bytes / 10 slots) to new size (543 bytes / 52 slots)
         let current_len = identity_info.data_len();
         if current_len < new_len {
-            identity_info.realloc(new_len, true)?;
+            identity_info.resize(new_len)?;
             // Pay additional rent for the extra space
             let rent = Rent::get()?;
             let required = rent.minimum_balance(new_len);
@@ -1130,7 +1130,7 @@ pub mod entros_anchor {
         // deserialize. Zero-fill ensures `last_reset_timestamp` starts at 0.
         let current_len = identity_info.data_len();
         if current_len < new_len {
-            identity_info.realloc(new_len, true)?;
+            identity_info.resize(new_len)?;
             let rent = Rent::get()?;
             let required = rent.minimum_balance(new_len);
             let current_lamports = identity_info.lamports();
@@ -1296,7 +1296,7 @@ pub mod entros_anchor {
         // Realloc legacy layout PDA if needed
         let current_len = identity_info.data_len();
         if current_len < new_len {
-            identity_info.realloc(new_len, true)?;
+            identity_info.resize(new_len)?;
             let rent = Rent::get()?;
             let required = rent.minimum_balance(new_len);
             let current_lamports = identity_info.lamports();
