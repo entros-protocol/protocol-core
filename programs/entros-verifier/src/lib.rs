@@ -9,6 +9,7 @@ mod groth16_verifier;
 #[cfg(test)]
 mod mock_verifier;
 mod state;
+#[rustfmt::skip]
 mod verifying_key;
 
 use errors::VerifierError;
