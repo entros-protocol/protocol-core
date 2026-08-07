@@ -49,7 +49,7 @@ impl IdentityState {
         + 8   // last_reset_timestamp
         + 32  // new_wallet
         + 2   // projection_version
-        + 8;  // last_rebaseline_timestamp
+        + 8; // last_rebaseline_timestamp
 
     /// Pre-reset layout size. Used by `reset_identity_state` to detect legacy
     /// accounts that need realloc before the new field can be written.
@@ -89,5 +89,5 @@ pub struct EncryptedBaseline {
 impl EncryptedBaseline {
     pub const LEN: usize = 8   // discriminator
         + 96  // blob
-        + 1;  // bump
+        + 1; // bump
 }

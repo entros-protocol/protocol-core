@@ -13,10 +13,7 @@ const NR_PUBLIC_INPUTS: usize = 4;
 /// # Arguments
 /// * `proof_bytes` - 256 bytes: proof_a (64, negated) + proof_b (128) + proof_c (64)
 /// * `public_inputs` - 4 x 32-byte big-endian field elements
-pub fn verify_proof(
-    proof_bytes: &[u8],
-    public_inputs: &[[u8; 32]],
-) -> Result<()> {
+pub fn verify_proof(proof_bytes: &[u8], public_inputs: &[[u8; 32]]) -> Result<()> {
     if proof_bytes.len() != 256 {
         return Err(VerifierError::InvalidProofFormat.into());
     }
@@ -41,14 +38,9 @@ pub fn verify_proof(
         public_inputs[3],
     ];
 
-    let mut verifier = Groth16Verifier::new(
-        &proof_a,
-        &proof_b,
-        &proof_c,
-        &pub_inputs,
-        &VERIFYINGKEY,
-    )
-    .map_err(|_| VerifierError::ProofVerificationFailed)?;
+    let mut verifier =
+        Groth16Verifier::new(&proof_a, &proof_b, &proof_c, &pub_inputs, &VERIFYINGKEY)
+            .map_err(|_| VerifierError::ProofVerificationFailed)?;
 
     verifier
         .verify()
