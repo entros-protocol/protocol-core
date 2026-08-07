@@ -17,7 +17,9 @@ mod errors;
 mod state;
 
 use errors::EntrosAnchorError;
-use state::{EncryptedBaseline, IdentityState};
+use state::EncryptedBaseline;
+/// Public account type for cross-program clients that read Entros Anchor state.
+pub use state::IdentityState;
 
 declare_id!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
 
