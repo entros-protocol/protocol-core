@@ -2,7 +2,7 @@
 name = "entros-registry"
 version = "0.1.0"
 edition = "2021"
-description = "Protocol registry, trust scoring, and validator management for Entros Protocol"
+description = "Protocol configuration, Trust Score preview, treasury, and validator registration scaffolding for Entros"
 
 [lib]
 crate-type = ["cdylib", "lib"]

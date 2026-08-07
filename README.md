@@ -1,14 +1,16 @@
 # protocol-core
 
-Solana on-chain programs for the Entros Protocol. Three Anchor programs handle identity minting, ZK proof verification, and protocol governance.
+Solana programs for the Entros Protocol. Three Anchor programs handle Anchor minting, zero-knowledge verification, and protocol configuration.
 
 ## Programs
 
-**entros-anchor** — Non-transferable identity token. Creates a Token-2022 mint with the NonTransferable extension, mints one token per user, and manages an IdentityState PDA that tracks verification history and Trust Score. Mints require a validator-signed Ed25519 receipt binding the wallet, commitment, and validation timestamp — verified on-chain via the Instructions sysvar.
+**entros-anchor** creates a non-transferable Token-2022 credential. It stores verification history and Trust Score in one wallet-derived `IdentityState` PDA.
 
-**entros-verifier** — ZK proof verification. Accepts Groth16 proofs and public inputs, verifies them on-chain via `groth16-solana`, and manages challenge nonces for anti-replay.
+Minting requires a validator-signed Ed25519 receipt. The receipt binds the wallet, commitment, and validation timestamp.
 
-**entros-registry** — Protocol configuration and validator management. Stores protocol parameters (trust score weights, challenge expiry, max stake) and handles validator registration with SOL staking.
+**entros-verifier** verifies Groth16 proofs and public inputs through `groth16-solana`. It also manages anti-replay challenge nonces.
+
+**entros-registry** stores protocol configuration and validator-registration scaffolding. The devnet program accepts SOL deposits but does not select validators or distribute rewards.
 
 ## Devnet Program IDs
 
@@ -21,7 +23,7 @@ Solana on-chain programs for the Entros Protocol. Three Anchor programs handle i
 ## Setup
 
 ```bash
-# Prerequisites: Rust, Solana CLI >= 3.0, Anchor CLI >= 0.32, Node.js >= 20
+# Prerequisites: Rust, Solana CLI 2.2.1, Anchor CLI 0.32.1, Node.js 24 or later
 
 # Install dependencies
 npm install
@@ -29,12 +31,11 @@ npm install
 # Build all programs
 anchor build
 
-# Run tests (starts a local validator, deploys, runs 16 integration tests)
+# Run the Anchor integration suite
 anchor test
 
-# Deploy to devnet
-solana config set --url devnet
-anchor deploy --provider.cluster devnet
+# Upgrade all three devnet programs with the registered admin authority
+sh scripts/upgrade-devnet.sh
 ```
 
 ## Tests
@@ -43,11 +44,13 @@ anchor deploy --provider.cluster devnet
 anchor test
 ```
 
-16 tests covering:
+The integration suite covers:
 - Identity minting (NonTransferable Token-2022, duplicate prevention, multi-user)
 - Proof verification (valid/invalid proofs, challenge expiry, replay prevention)
-- Registry (protocol initialization, validator staking, trust score computation)
-- End-to-end flow (mint → challenge → verify → update trust score)
+- Registry (protocol initialization, validator registration scaffolding, Trust Score preview)
+- End-to-end mint, challenge, proof, and Trust Score updates
+
+Separate LiteSVM suites cover transfer restrictions, account migration, Trust Score rules, and compute behavior.
 
 ## License
 
