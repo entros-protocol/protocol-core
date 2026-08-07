@@ -690,8 +690,7 @@ describe("entros-anchor", () => {
     });
 
     const newCommitment1 = Buffer.from(fixture.public_inputs[0]);
-    const newCommitment2 = Buffer.alloc(32, 0xd2);
-    
+
     // First update (successful)
     const nonce1 = Array.from(anchor.web3.Keypair.generate().publicKey.toBytes());
     const [verificationPda1] = anchor.web3.PublicKey.findProgramAddressSync(
@@ -735,7 +734,7 @@ describe("entros-anchor", () => {
 
     try {
       await program.methods
-        .updateAnchor(Array.from(newCommitment2), nonce2)
+        .updateAnchor(Array.from(newCommitment1), nonce2)
         .accountsStrict({
           authority: user.publicKey,
           identityState: boot.identityPda,
