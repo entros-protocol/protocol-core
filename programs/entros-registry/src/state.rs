@@ -17,14 +17,18 @@ pub struct ProtocolConfig {
     /// Lamports charged per verification (user-pays model)
     pub verification_fee: u64,
     pub migration_fee: u64,
-    /// Public key the off-chain validator service uses to sign mint receipts
-    /// (master-list #146). entros-anchor::mint_anchor verifies an
+    /// Public key the off-chain validator service uses to sign receipts.
+    /// entros-anchor verifies an
     /// Ed25519Program::verify instruction in the same transaction was signed
     /// against this key. Set atomically at `initialize_protocol` and rotated
     /// via `set_validator_pubkey` (admin-only); both reject a zero pubkey. A
     /// zero pubkey (only possible on a pre-migration account) makes
     /// entros-anchor reject the mint (fail closed), not skip the check.
     pub validator_pubkey: Pubkey,
+    /// Projection version assigned to new and recovered identities.
+    pub current_projection_version: u16,
+    /// Oldest projection version accepted by normal verification updates.
+    pub minimum_supported_projection_version: u16,
 }
 
 impl ProtocolConfig {
@@ -37,10 +41,14 @@ impl ProtocolConfig {
         + 1   // bump
         + 8   // verification_fee
         + 8   // migration_fee
-        + 32; // validator_pubkey
+        + 32  // validator_pubkey
+        + 2   // current_projection_version
+        + 2; // minimum_supported_projection_version
     /// Byte offset of `validator_pubkey` in the serialised account.
-    /// Used by entros-anchor for raw-byte reads (master-list #146).
+    /// Used by entros-anchor for raw-byte reads.
     pub const OFFSET_VALIDATOR_PUBKEY: usize = 77;
+    pub const OFFSET_CURRENT_PROJECTION_VERSION: usize = 109;
+    pub const OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION: usize = 111;
 }
 
 #[account]

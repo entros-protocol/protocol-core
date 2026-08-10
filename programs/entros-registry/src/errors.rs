@@ -24,4 +24,10 @@ pub enum RegistryError {
         "Validator pubkey must be non-zero (zero pubkey would silently disable receipt binding)"
     )]
     InvalidValidatorPubkey,
+    #[msg("Minimum supported projection version exceeds the current version")]
+    InvalidProjectionVersionRange,
+    #[msg("Current projection version cannot decrease")]
+    ProjectionVersionRollback,
+    #[msg("Minimum supported projection version cannot decrease")]
+    MinimumProjectionVersionRollback,
 }

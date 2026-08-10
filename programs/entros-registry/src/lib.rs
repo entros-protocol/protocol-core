@@ -25,6 +25,39 @@ fn isqrt(n: u64) -> u64 {
     x
 }
 
+fn read_projection_versions(data: &[u8]) -> Result<(u16, u16)> {
+    if data.len() <= ProtocolConfig::OFFSET_CURRENT_PROJECTION_VERSION {
+        return Ok((0, 0));
+    }
+    require!(
+        data.len() >= ProtocolConfig::LEN,
+        RegistryError::InvalidProtocolConfig
+    );
+    let current = u16::from_le_bytes([
+        data[ProtocolConfig::OFFSET_CURRENT_PROJECTION_VERSION],
+        data[ProtocolConfig::OFFSET_CURRENT_PROJECTION_VERSION + 1],
+    ]);
+    let minimum = u16::from_le_bytes([
+        data[ProtocolConfig::OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION],
+        data[ProtocolConfig::OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION + 1],
+    ]);
+    require!(minimum <= current, RegistryError::InvalidProtocolConfig);
+    Ok((current, minimum))
+}
+
+fn validate_projection_transition(stored: (u16, u16), next: (u16, u16)) -> Result<()> {
+    require!(
+        next.1 <= next.0,
+        RegistryError::InvalidProjectionVersionRange
+    );
+    require!(next.0 >= stored.0, RegistryError::ProjectionVersionRollback);
+    require!(
+        next.1 >= stored.1,
+        RegistryError::MinimumProjectionVersionRollback
+    );
+    Ok(())
+}
+
 declare_id!("6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW");
 
 security_txt! {
@@ -52,8 +85,8 @@ pub mod entros_registry {
         // Set the validator pubkey atomically at creation and reject zero:
         // entros-anchor fails closed on an all-zero pubkey, so a config born
         // without one would disable minting until a separate migration ran.
-        // `InitializeProtocol` allocates the full `ProtocolConfig::LEN`, so the
-        // field is in-bounds here — no realloc needed. Rotation later still
+        // `InitializeProtocol` allocates the full `ProtocolConfig::LEN`, so this
+        // path needs no realloc. Rotation still
         // goes through `set_validator_pubkey`.
         require!(
             validator_pubkey != Pubkey::default(),
@@ -68,6 +101,8 @@ pub mod entros_registry {
         config.bump = ctx.bumps.protocol_config;
         config.verification_fee = verification_fee;
         config.validator_pubkey = validator_pubkey;
+        config.current_projection_version = 0;
+        config.minimum_supported_projection_version = 0;
         Ok(())
     }
 
@@ -88,10 +123,10 @@ pub mod entros_registry {
         Ok(())
     }
 
-    /// Set the validator signing pubkey used for mint receipt binding
-    /// (master-list #146 Phase 3). Admin-only. Resizes the account from
+    /// Set the validator signing pubkey used for receipt binding.
+    /// Admin-only. Resizes the account from
     /// any legacy layout (69 bytes pre-migration_fee, 77 bytes
-    /// pre-validator_pubkey) up to the current 109-byte layout in a
+    /// pre-validator_pubkey) up to the current 113-byte layout in a
     /// single call. Subsequent rotation calls realloc is a no-op.
     ///
     /// Uses raw-byte access (mirrors `migrate_admin`) rather than
@@ -100,7 +135,7 @@ pub mod entros_registry {
     /// account would fail deserialization with `AccountDidNotDeserialize`
     /// before the resize could fix it.
     ///
-    /// Zero pubkey is rejected — entros-anchor fails closed on a zero pubkey
+    /// Reject a zero pubkey because entros-anchor fails closed on it
     /// (rejects the mint), so writing zero would brick minting rather than
     /// rotate the binding.
     pub fn set_validator_pubkey(
@@ -131,7 +166,7 @@ pub mod entros_registry {
         // Resize to the current layout if the account predates one or more
         // field additions. `realloc(_, true)` zero-fills the new bytes,
         // which leaves any unset intermediate fields (e.g. migration_fee)
-        // at zero — safe defaults that match `Default::default()`.
+        // at zero. These safe defaults match `Default::default()`.
         let new_len = ProtocolConfig::LEN;
         let current_len = config_info.data_len();
         if current_len < new_len {
@@ -163,6 +198,78 @@ pub mod entros_registry {
         emit!(ValidatorPubkeySet {
             admin: ctx.accounts.admin.key(),
             validator_pubkey,
+        });
+
+        Ok(())
+    }
+
+    /// Set the active projection version and the oldest version accepted by
+    /// normal verification updates. Admin-only.
+    pub fn set_projection_versions(
+        ctx: Context<SetProjectionVersions>,
+        current_projection_version: u16,
+        minimum_supported_projection_version: u16,
+    ) -> Result<()> {
+        let config_info = &ctx.accounts.protocol_config;
+        require_keys_eq!(
+            *config_info.owner,
+            crate::ID,
+            RegistryError::InvalidProtocolConfig
+        );
+        let stored_versions = {
+            let data = config_info.try_borrow_data()?;
+            require!(data.len() >= 40, RegistryError::InvalidProtocolConfig);
+            let stored_admin = Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(RegistryError::InvalidProtocolConfig))?;
+            require!(
+                stored_admin == ctx.accounts.admin.key(),
+                RegistryError::Unauthorized
+            );
+            read_projection_versions(&data)?
+        };
+        validate_projection_transition(
+            stored_versions,
+            (
+                current_projection_version,
+                minimum_supported_projection_version,
+            ),
+        )?;
+
+        let new_len = ProtocolConfig::LEN;
+        let current_len = config_info.data_len();
+        if current_len < new_len {
+            config_info.resize(new_len)?;
+
+            let rent = Rent::get()?;
+            let required = rent.minimum_balance(new_len);
+            let current = config_info.lamports();
+            if required > current {
+                system_program::transfer(
+                    CpiContext::new(
+                        ctx.accounts.system_program.to_account_info(),
+                        system_program::Transfer {
+                            from: ctx.accounts.admin.to_account_info(),
+                            to: config_info.to_account_info(),
+                        },
+                    ),
+                    required - current,
+                )?;
+            }
+        }
+
+        let mut data = config_info.try_borrow_mut_data()?;
+        data[ProtocolConfig::OFFSET_CURRENT_PROJECTION_VERSION
+            ..ProtocolConfig::OFFSET_CURRENT_PROJECTION_VERSION + 2]
+            .copy_from_slice(&current_projection_version.to_le_bytes());
+        data[ProtocolConfig::OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION
+            ..ProtocolConfig::OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION + 2]
+            .copy_from_slice(&minimum_supported_projection_version.to_le_bytes());
+        drop(data);
+
+        emit!(ProjectionVersionsSet {
+            admin: ctx.accounts.admin.key(),
+            current_projection_version,
+            minimum_supported_projection_version,
         });
 
         Ok(())
@@ -502,6 +609,22 @@ pub struct SetValidatorPubkey<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetProjectionVersions<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// CHECK: The handler validates the PDA, owner, stored admin, and layout.
+    #[account(
+        mut,
+        seeds = [b"protocol_config"],
+        bump,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct WithdrawTreasury<'info> {
     #[account(
         mut,
@@ -634,4 +757,40 @@ pub struct AdminMigrated {
 pub struct ValidatorPubkeySet {
     pub admin: Pubkey,
     pub validator_pubkey: Pubkey,
+}
+
+#[event]
+pub struct ProjectionVersionsSet {
+    pub admin: Pubkey,
+    pub current_projection_version: u16,
+    pub minimum_supported_projection_version: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_projection_versions, validate_projection_transition};
+
+    #[test]
+    fn legacy_projection_policy_advances_monotonically() {
+        let legacy = [0u8; 109];
+        let initial = read_projection_versions(&legacy).expect("legacy projection policy");
+        assert_eq!(initial, (0, 0));
+        assert!(validate_projection_transition(initial, (1, 0)).is_ok());
+        assert!(validate_projection_transition((1, 0), (1, 1)).is_ok());
+    }
+
+    #[test]
+    fn current_projection_version_cannot_roll_back() {
+        assert!(validate_projection_transition((2, 1), (1, 1)).is_err());
+    }
+
+    #[test]
+    fn minimum_projection_version_cannot_roll_back() {
+        assert!(validate_projection_transition((2, 1), (2, 0)).is_err());
+    }
+
+    #[test]
+    fn projection_window_cannot_invert() {
+        assert!(validate_projection_transition((1, 0), (1, 2)).is_err());
+    }
 }

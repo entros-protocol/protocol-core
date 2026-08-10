@@ -52,7 +52,7 @@ describe("entros-registry", () => {
         })
         .rpc();
     } catch {
-      // Already initialized — that's fine
+      // Reuse the existing initialized account.
     }
 
     const config = await program.account.protocolConfig.fetch(protocolConfigPda);
@@ -82,7 +82,7 @@ describe("entros-registry", () => {
         .rpc();
       expect.fail("Should have thrown");
     } catch (err: any) {
-      // Account already initialized — Anchor prevents double init
+      // Anchor prevents a second initialization.
       expect(err).to.exist;
     }
   });
@@ -259,7 +259,7 @@ describe("entros-registry", () => {
       .signers([validator])
       .rpc();
 
-    // Attacker tries to unstake — but PDA is derived from validator's key,
+    // The attacker tries to unstake. The PDA derives from the validator's key,
     // so the seeds constraint will fail (attacker's key != validator's key)
     const [attackerStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("validator"), attacker.publicKey.toBuffer()],
@@ -277,7 +277,7 @@ describe("entros-registry", () => {
         })
         .signers([attacker])
         .rpc();
-      expect.fail("Should have thrown — attacker cannot unstake another validator");
+      expect.fail("Should have thrown: attacker cannot unstake another validator");
     } catch (err: any) {
       expect(err).to.exist;
     }
@@ -348,9 +348,97 @@ describe("entros-registry", () => {
         })
         .signers([attacker])
         .rpc();
-      expect.fail("Should have thrown — non-admin cannot update config");
+      expect.fail("Should have thrown: non-admin cannot update config");
     } catch (err: any) {
       expect(err).to.exist;
+    }
+  });
+
+  it("sets a bounded projection version window", async () => {
+    await program.methods
+      .setProjectionVersions(4, 2)
+      .accountsStrict({
+        admin: admin.publicKey,
+        protocolConfig: protocolConfigPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const config = await program.account.protocolConfig.fetch(protocolConfigPda);
+    expect(config.currentProjectionVersion).to.equal(4);
+    expect(config.minimumSupportedProjectionVersion).to.equal(2);
+  });
+
+  it("rejects an inverted projection version window", async () => {
+    try {
+      await program.methods
+        .setProjectionVersions(4, 5)
+        .accountsStrict({
+          admin: admin.publicKey,
+          protocolConfig: protocolConfigPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+      expect.fail("minimum projection version cannot exceed current");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/InvalidProjectionVersionRange/);
+    }
+  });
+
+  it("rejects a current projection version rollback", async () => {
+    try {
+      await program.methods
+        .setProjectionVersions(3, 2)
+        .accountsStrict({
+          admin: admin.publicKey,
+          protocolConfig: protocolConfigPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+      expect.fail("current projection version cannot decrease");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ProjectionVersionRollback/);
+    }
+  });
+
+  it("rejects a minimum projection version rollback", async () => {
+    try {
+      await program.methods
+        .setProjectionVersions(4, 1)
+        .accountsStrict({
+          admin: admin.publicKey,
+          protocolConfig: protocolConfigPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+      expect.fail("minimum projection version cannot decrease");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/MinimumProjectionVersionRollback/);
+    }
+  });
+
+  it("rejects projection version changes from a non-admin", async () => {
+    const attacker = anchor.web3.Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        attacker.publicKey,
+        2_000_000_000,
+      ),
+    );
+
+    try {
+      await program.methods
+        .setProjectionVersions(5, 2)
+        .accountsStrict({
+          admin: attacker.publicKey,
+          protocolConfig: protocolConfigPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([attacker])
+        .rpc();
+      expect.fail("non-admin must not change projection versions");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/Unauthorized/);
     }
   });
 
@@ -407,7 +495,7 @@ describe("entros-registry", () => {
         })
         .signers([attacker])
         .rpc();
-      expect.fail("Should have thrown — non-admin cannot withdraw");
+      expect.fail("Should have thrown: non-admin cannot withdraw");
     } catch (err: any) {
       expect(err).to.exist;
     }
@@ -426,7 +514,7 @@ describe("entros-registry", () => {
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .rpc();
-      expect.fail("Should have thrown — insufficient treasury balance");
+      expect.fail("Should have thrown: insufficient treasury balance");
     } catch (err: any) {
       expect(err).to.exist;
     }
