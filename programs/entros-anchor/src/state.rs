@@ -29,7 +29,7 @@ pub struct IdentityState {
     pub last_reset_timestamp: i64,
     /// new wallet for migrate_identity()
     pub new_wallet: Pubkey,
-    /// Version of the fingerprint projection space used for the current_commitment (master-list #192)
+    /// Projection space version used for the current commitment.
     pub projection_version: u16,
     /// Most recent `rebaseline_anchor` invocation
     pub last_rebaseline_timestamp: i64,
@@ -67,7 +67,7 @@ impl IdentityState {
 /// Hamming-distance ZK proof can recover its private witnesses on any
 /// device with the originating wallet.
 ///
-/// The blob is opaque ciphertext to the program — AES-256-GCM produced
+/// The blob is opaque AES-256-GCM ciphertext produced
 /// off-chain in the SDK under a key derived from a deterministic
 /// `signMessage` on a domain-separated payload. The GCM AAD binds the
 /// blob to (wallet, this PDA's address, current on-chain commitment),
@@ -75,7 +75,7 @@ impl IdentityState {
 /// against the new commitment and the SDK falls back to a fresh-capture
 /// flow.
 ///
-/// The program never decrypts the blob — it only stores opaque bytes.
+/// The program never decrypts the blob. It only stores opaque bytes.
 /// Plaintext biometric data never reaches chain at any point.
 #[account]
 pub struct EncryptedBaseline {

@@ -108,10 +108,10 @@ test("ProtocolConfig byte offsets match Borsh layout", async () => {
   // entros-anchor reads ProtocolConfig fields via hardcoded byte offsets on
   // an UncheckedAccount + raw try_borrow_data. If state.rs reorders fields
   // or changes a field type, the IDL deserialization shifts but the raw
-  // reads do not — this test fails fast on that drift.
+  // reads do not. This test fails fast on that drift.
   if (!rawAccData) {
     throw new Error(
-      "rawAccData not initialized — initializeProtocol must run first",
+      "rawAccData not initialized: initializeProtocol must run first",
     );
   }
   const config = decodeProtocolConfigDev(rawAccData);
@@ -416,10 +416,8 @@ test("registry.setValidatorPubkey() should fail with zero pubkey", async () => {
   console.log(
     "\n----------------== registry.setValidatorPubkey() should fail with zero pubkey",
   );
-  // master-list #146 Phase 3: zero pubkey would silently disable the
-  // mint receipt check (entros-anchor treats it as 'not yet configured'),
-  // so the registry refuses to write it. Forces operators to use a real
-  // signing key for rotation.
+  // A zero pubkey would silently disable mint receipt verification.
+  // Reject it so operators must use a real signing key for rotation.
   expectedErr =
     "Error Number: 6009. Error Message: Validator pubkey must be non-zero";
   setValidatorPubkey(
@@ -436,7 +434,7 @@ test("registry.setValidatorPubkey() should fail by non-admin", async () => {
   );
   expectedErr =
     "Error Code: Unauthorized. Error Number: 6003. Error Message: Unauthorized: caller is not the expected authority.";
-  // Use a fresh non-admin keypair (user1Kp) — admin constraint should reject.
+  // Use a fresh non-admin keypair. The admin constraint must reject it.
   const fakeValidator = Keypair.generate().publicKey;
   setValidatorPubkey(user1Kp, fakeValidator, protocolConfigPda, expectedErr);
 });
@@ -444,8 +442,8 @@ test("registry.setValidatorPubkey() should fail by non-admin", async () => {
 test("registry.setValidatorPubkey()", async () => {
   console.log("\n----------------== registry.setValidatorPubkey()");
   // First call: writes the validator pubkey (no realloc needed since
-  // ProtocolConfig was initialized at the new 109-byte length earlier
-  // in this test sequence — the realloc path is exercised in the live
+  // ProtocolConfig was initialized at the current 113-byte length earlier
+  // in this test sequence. The realloc path is exercised in the live
   // devnet migration when an existing 77-byte account is upgraded).
   const validator = Keypair.generate().publicKey;
   setValidatorPubkey(adminKp, validator, protocolConfigPda);

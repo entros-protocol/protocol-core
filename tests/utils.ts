@@ -16,25 +16,92 @@ export const TEST_VALIDATOR = web3.Keypair.fromSeed(
 /**
  * Build the Ed25519Program instruction carrying a validator-signed mint
  * receipt. Prepend it (via `.preInstructions([...])`) immediately before
- * `mintAnchor`; `verify_mint_receipt` reads it from the preceding instruction.
- * Message layout matches the on-chain parser:
- *   wallet(32) || commitment(32) || validated_at i64 LE(8) = 72 bytes.
+ * `mintAnchor`; receipt verification reads it from the preceding instruction.
+ * Projection zero uses the legacy 72-byte message. Later versions use the
+ * domain-separated message that binds purpose and projection version.
  * `validated_at` is backdated a few seconds so it is fresh but never ahead of
  * the cluster clock (the future-check rejects ts > now).
  */
 export function buildMintReceiptIx(
   walletPubkey: PublicKey,
   commitment: Buffer,
+  projectionVersion = 0,
 ): web3.TransactionInstruction {
   const validatedAt = Math.floor(Date.now() / 1000) - 30;
-  const message = Buffer.alloc(72);
-  walletPubkey.toBuffer().copy(message, 0);
-  commitment.copy(message, 32);
-  message.writeBigInt64LE(BigInt(validatedAt), 64);
+  const message = buildReceiptMessage(
+    walletPubkey,
+    commitment,
+    1,
+    projectionVersion,
+    validatedAt,
+  );
   return web3.Ed25519Program.createInstructionWithPrivateKey({
     privateKey: TEST_VALIDATOR.secretKey,
     message,
   });
+}
+
+export function buildRebaselineReceiptIx(
+  walletPubkey: PublicKey,
+  commitment: Buffer,
+  projectionVersion: number,
+): web3.TransactionInstruction {
+  const validatedAt = Math.floor(Date.now() / 1000) - 30;
+  const message = buildReceiptMessage(
+    walletPubkey,
+    commitment,
+    2,
+    projectionVersion,
+    validatedAt,
+  );
+  return web3.Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: TEST_VALIDATOR.secretKey,
+    message,
+  });
+}
+
+export function buildResetReceiptIx(
+  walletPubkey: PublicKey,
+  commitment: Buffer,
+  projectionVersion: number,
+  validatedAt = Math.floor(Date.now() / 1000) - 30,
+): web3.TransactionInstruction {
+  const message = buildReceiptMessage(
+    walletPubkey,
+    commitment,
+    3,
+    projectionVersion,
+    validatedAt,
+  );
+  return web3.Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: TEST_VALIDATOR.secretKey,
+    message,
+  });
+}
+
+function buildReceiptMessage(
+  walletPubkey: PublicKey,
+  commitment: Buffer,
+  purpose: 1 | 2 | 3,
+  projectionVersion: number,
+  validatedAt: number,
+): Buffer {
+  if (purpose === 1 && projectionVersion === 0) {
+    const message = Buffer.alloc(72);
+    walletPubkey.toBuffer().copy(message, 0);
+    commitment.copy(message, 32);
+    message.writeBigInt64LE(BigInt(validatedAt), 64);
+    return message;
+  }
+
+  const message = Buffer.alloc(103);
+  Buffer.from("entros-validator-receipt-v2\0", "ascii").copy(message, 0);
+  message[28] = purpose;
+  message.writeUInt16LE(projectionVersion, 29);
+  walletPubkey.toBuffer().copy(message, 31);
+  commitment.copy(message, 63);
+  message.writeBigInt64LE(BigInt(validatedAt), 95);
+  return message;
 }
 
 //--------- entrosAnchor
@@ -113,6 +180,7 @@ export async function bootstrapVerifiedUser(params: {
   protocolConfigPda: PublicKey;
   treasuryPda: PublicKey;
   mintAuthorityPda: PublicKey;
+  projectionVersion?: number;
 }): Promise<BootstrappedUser> {
   const {
     user,
@@ -122,6 +190,7 @@ export async function bootstrapVerifiedUser(params: {
     protocolConfigPda,
     treasuryPda,
     mintAuthorityPda,
+    projectionVersion = 0,
   } = params;
   const { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } = await import(
     "@solana/spl-token"
@@ -158,7 +227,9 @@ export async function bootstrapVerifiedUser(params: {
       treasury: treasuryPda,
       instructionsSysvar: web3.SYSVAR_INSTRUCTIONS_PUBKEY,
     })
-    .preInstructions([buildMintReceiptIx(user.publicKey, initialCommitment)])
+    .preInstructions([
+      buildMintReceiptIx(user.publicKey, initialCommitment, projectionVersion),
+    ])
     .signers([user])
     .rpc();
 

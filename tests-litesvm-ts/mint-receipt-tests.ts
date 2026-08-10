@@ -60,7 +60,7 @@ const MINT_ANCHOR_DISCRIMINATOR = Buffer.from([
 
 // Build the canonical receipt message:
 //   wallet_pubkey (32) || commitment_new (32) || validated_at i64 LE (8) = 72 bytes
-// Mirrors entros_validation::receipts and entros_anchor::verify_mint_receipt.
+// Mirrors the validator signer and the on-chain receipt verifier.
 function buildReceiptMessage(
   wallet: PublicKey,
   commitment: Buffer,
@@ -122,7 +122,7 @@ test("mint_anchor without an Ed25519 receipt rejects with MissingValidatorReceip
   const commitment = Buffer.alloc(32, 7); // arbitrary non-zero commitment
 
   const expectedErr =
-    "Error Number: 6015. Error Message: mint_anchor expected a preceding Ed25519Program::verify instruction with a validator-signed receipt";
+    "Error Number: 6016. Error Message: Expected a preceding Ed25519Program::verify instruction with a validator-signed receipt";
   const ix = buildMintAnchorIx(
     user1Kp.publicKey,
     commitment,
@@ -177,13 +177,13 @@ test("mint_anchor with a valid Ed25519 receipt succeeds", async () => {
   const sendRes = svm.sendTransaction(tx);
 
   // Inline assertion (instead of sendTxns/checkLogs) because the bundle
-  // contains two program ids — checkLogs filters logs by a single program.
+  // contains two program ids. checkLogs filters logs by one program.
   if ("err" in sendRes) {
     throw new Error(
       `Expected mint_anchor to succeed with valid receipt, got: ${JSON.stringify((sendRes as unknown as { err: unknown }).err)}`,
     );
   }
-  // The success path no longer logs from verify_mint_receipt; presence of
+  // The success path does not log from receipt verification. Presence of
   // the standard mint_anchor program log is the success signal.
   const logs = (sendRes as unknown as { logs(): string[] }).logs();
   expect(

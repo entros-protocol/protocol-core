@@ -43,7 +43,7 @@ export const hackerKp = new Keypair();
 
 // Shared mint-receipt validator. `initializeProtocol` defaults the on-chain
 // ProtocolConfig.validator_pubkey to this key, and `mintAnchor` signs the
-// receipt it prepends with the matching secret — so helper-built mints satisfy
+// receipt it prepends with the matching secret, so helper-built mints satisfy
 // the on-chain receipt binding without each test wiring its own key. Suites
 // that need their own validator (mint-receipt-tests, encrypted-baseline-tests)
 // pass an explicit validator_pubkey and build their own receipts.
@@ -294,8 +294,8 @@ export const updateProtocolConfig = (
   );
 };
 
-/// Set the validator signing pubkey for mint receipt binding
-/// (master-list #146 Phase 3). Admin-only. Triggers ProtocolConfig
+/// Set the validator signing pubkey for mint receipt binding.
+/// Admin-only. Triggers ProtocolConfig
 /// realloc 77 -> 109 bytes on first call against a legacy account.
 export const setValidatorPubkey = (
   signer: Keypair, //admin
@@ -327,11 +327,42 @@ export const setValidatorPubkey = (
   );
 };
 
-/// Write or overwrite the caller's encrypted baseline blob (master-list #98).
+export const setProjectionVersions = (
+  signer: Keypair,
+  currentProjectionVersion: number,
+  minimumSupportedProjectionVersion: number,
+  protocolConfig: PublicKey,
+  expectedErr = "",
+) => {
+  const disc = [94, 72, 141, 248, 223, 0, 44, 228];
+  const argData = [
+    ...numToBytes(currentProjectionVersion, 16),
+    ...numToBytes(minimumSupportedProjectionVersion, 16),
+  ];
+  const ix = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: protocolConfig, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    programId: registryAddr,
+    data: Buffer.from([...disc, ...argData]),
+  });
+  sendTxns(
+    svm.latestBlockhash(),
+    [ix],
+    [signer],
+    registryAddr,
+    maxComputeBudgets.set_projection_versions,
+    expectedErr,
+  );
+};
+
+/// Write or overwrite the caller's encrypted baseline blob.
 /// Uses init_if_needed on the EncryptedBaseline PDA at seeds
 /// [b"encrypted_baseline", signer.publicKey]. The program enforces that
 /// the IdentityState PDA exists at [b"identity", signer.publicKey] before
-/// writing — pre-mint attempts fail with IdentityStateNotFound.
+/// writing. Pre-mint attempts fail with IdentityStateNotFound.
 export const setEncryptedBaseline = (
   signer: Keypair,
   blob: Uint8Array, // must be exactly 96 bytes
@@ -538,8 +569,8 @@ export const mintAnchor = (
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
       { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
       { pubkey: treasury, isSigner: false, isWritable: true },
-      // Instructions sysvar — required by master-list #146 Phase 3
-      // mint receipt verification. Read-only; safe to pass even when
+      // Mint receipt verification reads the instructions sysvar.
+      // It is read-only and safe to pass even when
       // there's no preceding Ed25519 ix (handler logs and proceeds).
       { pubkey: INSTRUCTIONS_SYSVAR, isSigner: false, isWritable: false },
     ],
@@ -547,7 +578,7 @@ export const mintAnchor = (
     data: Buffer.from([...disc, ...argData]),
   });
   // Prepend a validator-signed mint receipt. mint_anchor now fails closed when
-  // the validator is configured (it always is — initializeProtocol writes
+  // the validator is configured. initializeProtocol always writes
   // LITESVM_VALIDATOR), so every successful mint needs a preceding
   // Ed25519Program::verify receipt signed by that key. validated_at = the
   // current svm clock, so the on-chain freshness check sees validated_at == now.
@@ -710,7 +741,7 @@ export const resetIdentityState = (
 ) => {
   const disc = [26, 78, 86, 143, 247, 132, 85, 203]; //copied from Anchor IDL
   const progAddr = anchorAddr;
-  const argData = [...new_commitment];
+  const argData = [...new_commitment, 0, 0];
   const blockhash = svm.latestBlockhash();
   const ix = new TransactionInstruction({
     keys: [
@@ -728,6 +759,75 @@ export const resetIdentityState = (
     [ix],
     [signer],
     progAddr,
+    maxComputeBudgets.reset_identity_state,
+    expectedErr,
+  );
+};
+
+export const resetIdentityStateVersioned = (
+  signer: Keypair,
+  newCommitment: Buffer<ArrayBuffer>,
+  identityState: PublicKey,
+  protocolConfig: PublicKey,
+  treasury: PublicKey,
+  projectionVersion: number,
+  receipt: {
+    purpose: 1 | 2 | 3;
+    validatedAt: bigint;
+    validator?: Keypair;
+    wallet?: PublicKey;
+    projectionVersion?: number;
+  } | null,
+  expectedErr = "",
+  remainingAccounts: PublicKey[] = [INSTRUCTIONS_SYSVAR],
+) => {
+  const disc = [26, 78, 86, 143, 247, 132, 85, 203];
+  const version = Buffer.alloc(2);
+  version.writeUInt16LE(projectionVersion);
+  const resetIx = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: identityState, isSigner: false, isWritable: true },
+      { pubkey: protocolConfig, isSigner: false, isWritable: false },
+      { pubkey: treasury, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+      ...remainingAccounts.map((pubkey) => ({
+        pubkey,
+        isSigner: false,
+        isWritable: false,
+      })),
+    ],
+    programId: anchorAddr,
+    data: Buffer.concat([Buffer.from(disc), newCommitment, version]),
+  });
+
+  const instructions = [resetIx];
+  if (receipt) {
+    const receiptMessage = Buffer.alloc(103);
+    Buffer.from("entros-validator-receipt-v2\0", "ascii").copy(
+      receiptMessage,
+      0,
+    );
+    receiptMessage[28] = receipt.purpose;
+    receiptMessage.writeUInt16LE(
+      receipt.projectionVersion ?? projectionVersion,
+      29,
+    );
+    (receipt.wallet ?? signer.publicKey).toBuffer().copy(receiptMessage, 31);
+    newCommitment.copy(receiptMessage, 63);
+    receiptMessage.writeBigInt64LE(receipt.validatedAt, 95);
+    const receiptIx = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: (receipt.validator ?? LITESVM_VALIDATOR).secretKey,
+      message: receiptMessage,
+    });
+    instructions.unshift(receiptIx);
+  }
+
+  sendTxns(
+    svm.latestBlockhash(),
+    instructions,
+    [signer],
+    anchorAddr,
     maxComputeBudgets.reset_identity_state,
     expectedErr,
   );

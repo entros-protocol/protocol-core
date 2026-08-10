@@ -16,7 +16,7 @@ pub enum EntrosAnchorError {
     IdentitySerializationFailed,
     #[msg("VerificationResult account is owned by the wrong program")]
     VerificationResultWrongOwner,
-    #[msg("VerificationResult account has stale layout (pre-binding-patch)")]
+    #[msg("VerificationResult account uses the legacy unbound layout")]
     StaleVerificationResult,
     #[msg("VerificationResult verifier does not match the signing authority")]
     VerifierMismatch,
@@ -34,13 +34,15 @@ pub enum EntrosAnchorError {
     UnauthorizedNewWallet,
     #[msg("VerificationResult.verified_at is in the future relative to the cluster clock")]
     ProofFromFuture,
-    #[msg("mint_anchor expected a preceding Ed25519Program::verify instruction with a validator-signed receipt; none found")]
+    #[msg(
+        "Expected a preceding Ed25519Program::verify instruction with a validator-signed receipt"
+    )]
     MissingValidatorReceipt,
     #[msg("Receipt was signed by a key that does not match ProtocolConfig.validator_pubkey")]
     ReceiptValidatorMismatch,
-    #[msg("Receipt commitment does not match the mint_anchor commitment argument")]
+    #[msg("Receipt commitment does not match the requested commitment")]
     ReceiptCommitmentMismatch,
-    #[msg("Receipt wallet does not match the mint signer")]
+    #[msg("Receipt wallet does not match the instruction signer")]
     ReceiptWalletMismatch,
     #[msg("Receipt has aged past MAX_RECEIPT_AGE_SECS")]
     ReceiptExpired,
@@ -48,9 +50,9 @@ pub enum EntrosAnchorError {
     ReceiptFromFuture,
     #[msg("Receipt message has malformed length or layout")]
     MalformedReceiptMessage,
-    #[msg("set_encrypted_baseline called before mint_anchor — IdentityState PDA does not exist")]
+    #[msg("set_encrypted_baseline called before mint_anchor: IdentityState PDA does not exist")]
     IdentityStateNotFound,
-    #[msg("ProtocolConfig.validator_pubkey is unset (all-zero); minting is disabled until a validator is configured")]
+    #[msg("ProtocolConfig.validator_pubkey is unset. Receipt-bound instructions are disabled until a validator is configured")]
     ValidatorNotConfigured,
     /// Retired. `update_anchor` enforced a one-hour floor between
     /// verifications until it was removed: the Trust Score already scores
@@ -60,4 +62,20 @@ pub enum EntrosAnchorError {
     /// number.
     #[msg("Retired. Verifications are no longer rate limited on chain.")]
     VerificationIntervalTooShort,
+    #[msg("Identity projection version is below the minimum supported version")]
+    ProjectionVersionTooOld,
+    #[msg("Identity projection version is newer than the current protocol version")]
+    ProjectionVersionTooNew,
+    #[msg("Rebaseline requires a newer current projection version")]
+    ProjectionVersionNotAdvanced,
+    #[msg("Receipt version does not match the required receipt format")]
+    ReceiptVersionMismatch,
+    #[msg("Receipt purpose does not match the requested instruction")]
+    ReceiptPurposeMismatch,
+    #[msg("Receipt projection version does not match the current protocol version")]
+    ReceiptProjectionVersionMismatch,
+    #[msg("Requested projection version does not match the current protocol version")]
+    ProjectionVersionMismatch,
+    #[msg("Reset requires exactly one instructions sysvar account for versioned projections and none for projection zero")]
+    InvalidResetReceiptAccounts,
 }

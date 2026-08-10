@@ -14,6 +14,8 @@ import {
   airdrop,
   bootstrapVerifiedUser,
   buildMintReceiptIx,
+  buildRebaselineReceiptIx,
+  buildResetReceiptIx,
   deriveIdentityPda,
   deriveMintPda,
   loadProofFixture,
@@ -33,6 +35,9 @@ describe("entros-anchor", () => {
   const entrosVerifierProgId = entrosVerifier.programId;
   let trustScore1vrf: number;
   let _trustScore2vrf: number;
+  let migrationUser: anchor.web3.Keypair;
+  let migrationIdentityPda: anchor.web3.PublicKey;
+  let migrationMintPda: anchor.web3.PublicKey;
 
   const [mintAuthorityPda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint_authority")],
@@ -202,7 +207,7 @@ describe("entros-anchor", () => {
   });
 
   it("rejects a mint with no validator receipt (fail closed)", async () => {
-    // ProtocolConfig.validator_pubkey is configured, so verify_mint_receipt
+    // ProtocolConfig.validator_pubkey is configured, so receipt verification
     // enforces: a mint_anchor with no preceding Ed25519 receipt instruction
     // must be rejected (MissingValidatorReceipt), never silently allowed.
     const user3 = anchor.web3.Keypair.generate();
@@ -297,7 +302,7 @@ describe("entros-anchor", () => {
       mintAuthorityPda,
     });
 
-    // Attacker tries to update the victim's identity — should fail at the
+    // The attacker tries to update the victim's identity. The request must fail at the
     // VerificationResult seeds derivation (attacker.pubkey != VR.verifier) and
     // at the Unauthorized ownership check.
     const attacker = anchor.web3.Keypair.generate();
@@ -317,7 +322,7 @@ describe("entros-anchor", () => {
         })
         .signers([attacker])
         .rpc();
-      expect.fail("Should have thrown — unauthorized update");
+      expect.fail("Should have thrown: unauthorized update");
     } catch (err: any) {
       expect(err).to.exist;
     }
@@ -382,7 +387,7 @@ describe("entros-anchor", () => {
     }
   });
 
-  // ---- Binding-patch security tests (added 2026-04-20) ----
+  // Verification-result binding security tests
 
   it("rejects reusing the same VerificationResult twice", async () => {
     const fixture = loadProofFixture();
@@ -431,7 +436,7 @@ describe("entros-anchor", () => {
         .signers([user])
         .rpc();
       expect.fail(
-        "Should have thrown — VR already consumed (prev commitment mismatch)",
+        "Should have thrown: verification result already consumed",
       );
     } catch (err: any) {
       expect(err).to.exist;
@@ -472,7 +477,7 @@ describe("entros-anchor", () => {
         })
         .signers([user])
         .rpc();
-      expect.fail("Should have thrown — CommitmentMismatch");
+      expect.fail("Should have thrown: CommitmentMismatch");
     } catch (err: any) {
       expect(err).to.exist;
       expect(String(err)).to.match(/CommitmentMismatch|6010/);
@@ -551,7 +556,7 @@ describe("entros-anchor", () => {
         })
         .signers([userB])
         .rpc();
-      expect.fail("Should have thrown — B cannot use A's VR");
+      expect.fail("Should have thrown: one wallet cannot use another wallet's verification result");
     } catch (err: any) {
       expect(err).to.exist;
     }
@@ -601,7 +606,7 @@ describe("entros-anchor", () => {
   });
 
   // Same-day dedup is covered by the recency_score computation in update_anchor.
-  // Post-binding-patch, each update requires a fresh proof bound to the
+  // Each update requires a fresh proof bound to the
   // specific commitment transition, so multi-update tests in-session need
   // multiple proof fixtures (see circuits/scripts/generate_test_fixture.ts).
   // The single-update trust_score value is asserted in the "updates identity
@@ -614,65 +619,250 @@ describe("entros-anchor", () => {
     expect(trustScore1vrf).to.be.greaterThan(0);
   });
 
-  it("rebaselines the identity to a new projection version", async () => {
-    const user = provider.wallet;
-    const [identityPda] = deriveIdentityPda(user.publicKey, entrosAnchorProgId);
-    
-    // Fetch identity before rebaseline
-    const identityBefore = await program.account.identityState.fetch(identityPda);
-    expect(identityBefore.projectionVersion).to.equal(0);
-    expect(identityBefore.lastRebaselineTimestamp.toNumber()).to.equal(0);
-    
-    const newCommitment = Buffer.alloc(32, 0xbb);
-    const newVersion = 3;
+  it("moves a legacy identity into the configured projection without changing reputation", async () => {
+    const fixture = loadProofFixture();
+    migrationUser = anchor.web3.Keypair.generate();
+    await airdrop(provider.connection, migrationUser.publicKey, 5_000_000_000);
+    const boot = await bootstrapVerifiedUser({
+      user: migrationUser,
+      entrosAnchor: program,
+      entrosVerifier,
+      fixture,
+      protocolConfigPda,
+      treasuryPda,
+      mintAuthorityPda,
+    });
+    migrationIdentityPda = boot.identityPda;
+    migrationMintPda = boot.mintPda;
 
     await program.methods
-      .rebaselineAnchor(Array.from(newCommitment), newVersion)
+      .updateAnchor(
+        Array.from(Buffer.from(fixture.public_inputs[0])),
+        boot.nonce,
+      )
       .accountsStrict({
-        authority: user.publicKey,
-        identityState: identityPda,
+        authority: migrationUser.publicKey,
+        identityState: boot.identityPda,
+        verificationResult: boot.verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
-        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
-      .preInstructions([buildMintReceiptIx(user.publicKey, newCommitment)])
+      .signers([migrationUser])
       .rpc();
 
-    // Fetch identity after rebaseline
-    const identityAfter = await program.account.identityState.fetch(identityPda);
-    expect(identityAfter.projectionVersion).to.equal(newVersion);
-    expect(identityAfter.lastRebaselineTimestamp.toNumber()).to.be.greaterThan(0);
-    expect(Buffer.from(identityAfter.currentCommitment)).to.deep.equal(newCommitment);
-    // Reputation should be preserved
-    expect(identityAfter.trustScore).to.equal(identityBefore.trustScore);
-    expect(identityAfter.verificationCount).to.equal(identityBefore.verificationCount);
-  });
+    const staleUser = anchor.web3.Keypair.generate();
+    await airdrop(provider.connection, staleUser.publicKey, 4_000_000_000);
+    const staleBoot = await bootstrapVerifiedUser({
+      user: staleUser,
+      entrosAnchor: program,
+      entrosVerifier,
+      fixture,
+      protocolConfigPda,
+      treasuryPda,
+      mintAuthorityPda,
+    });
 
-  it("fails to rebaseline before cooldown elapses", async () => {
-    const user = provider.wallet;
-    const [identityPda] = deriveIdentityPda(user.publicKey, entrosAnchorProgId);
-    const newCommitment = Buffer.alloc(32, 0xcc);
-    const newVersion = 4;
+    await registry.methods
+      .setProjectionVersions(1, 1)
+      .accountsStrict({
+        admin: provider.wallet.publicKey,
+        protocolConfig: protocolConfigPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
 
     try {
       await program.methods
-        .rebaselineAnchor(Array.from(newCommitment), newVersion)
+        .updateAnchor(
+          Array.from(Buffer.from(fixture.public_inputs[0])),
+          staleBoot.nonce,
+        )
         .accountsStrict({
-          authority: user.publicKey,
-          identityState: identityPda,
+          authority: staleUser.publicKey,
+          identityState: staleBoot.identityPda,
+          verificationResult: staleBoot.verificationPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([staleUser])
+        .rpc();
+      expect.fail("a version-zero identity must rebaseline before updating");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ProjectionVersionTooOld/);
+    }
+
+    const identityBefore = await program.account.identityState.fetch(
+      migrationIdentityPda,
+    );
+    const newCommitment = Buffer.alloc(32, 0xbb);
+
+    try {
+      await program.methods
+        .rebaselineAnchor(Array.from(newCommitment), 0)
+        .accountsStrict({
+          authority: migrationUser.publicKey,
+          identityState: migrationIdentityPda,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
           instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
-        .preInstructions([buildMintReceiptIx(user.publicKey, newCommitment)])
+        .preInstructions([
+          buildRebaselineReceiptIx(migrationUser.publicKey, newCommitment, 1),
+        ])
+        .signers([migrationUser])
         .rpc();
-      expect.fail("Should have failed due to rebaseline cooldown active");
-    } catch (err: any) {
-      expect(err).to.exist;
-      expect(String(err)).to.match(/RebaselineCooldownActive|6013/);
+      expect.fail("rebaseline accepted a stale requested projection version");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ProjectionVersionMismatch/);
     }
+
+    for (const invalidReceipt of [
+      buildMintReceiptIx(migrationUser.publicKey, newCommitment, 1),
+      buildRebaselineReceiptIx(migrationUser.publicKey, newCommitment, 2),
+      buildMintReceiptIx(migrationUser.publicKey, newCommitment),
+    ]) {
+      try {
+        await program.methods
+          .rebaselineAnchor(Array.from(newCommitment), 1)
+          .accountsStrict({
+            authority: migrationUser.publicKey,
+            identityState: migrationIdentityPda,
+            protocolConfig: protocolConfigPda,
+            treasury: treasuryPda,
+            instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          })
+          .preInstructions([invalidReceipt])
+          .signers([migrationUser])
+          .rpc();
+        expect.fail("rebaseline accepted a receipt with the wrong binding");
+      } catch (err: unknown) {
+        expect(String(err)).to.match(
+          /ReceiptPurposeMismatch|ReceiptProjectionVersionMismatch|ReceiptVersionMismatch/,
+        );
+      }
+    }
+
+    await program.methods
+      .rebaselineAnchor(Array.from(newCommitment), 1)
+      .accountsStrict({
+        authority: migrationUser.publicKey,
+        identityState: migrationIdentityPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .preInstructions([
+        buildRebaselineReceiptIx(migrationUser.publicKey, newCommitment, 1),
+      ])
+      .signers([migrationUser])
+      .rpc();
+
+    const identityAfter = await program.account.identityState.fetch(
+      migrationIdentityPda,
+    );
+    expect(identityAfter.projectionVersion).to.equal(1);
+    expect(Buffer.from(identityAfter.currentCommitment)).to.deep.equal(
+      newCommitment,
+    );
+    expect(identityAfter.trustScore).to.equal(identityBefore.trustScore);
+    expect(identityAfter.verificationCount).to.equal(
+      identityBefore.verificationCount,
+    );
+    expect(identityAfter.recentTimestamps).to.deep.equal(
+      identityBefore.recentTimestamps,
+    );
+
+    try {
+      await program.methods
+        .rebaselineAnchor(Array.from(Buffer.alloc(32, 0xcc)), 1)
+        .accountsStrict({
+          authority: migrationUser.publicKey,
+          identityState: migrationIdentityPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .preInstructions([
+          buildRebaselineReceiptIx(
+            migrationUser.publicKey,
+            Buffer.alloc(32, 0xcc),
+            1,
+          ),
+        ])
+        .signers([migrationUser])
+        .rpc();
+      expect.fail("rebaseline must advance the projection version");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ProjectionVersionNotAdvanced/);
+    }
+  });
+
+  it("derives the current projection when minting", async () => {
+    const user = anchor.web3.Keypair.generate();
+    await airdrop(provider.connection, user.publicKey, 3_000_000_000);
+    const [identityPda] = deriveIdentityPda(user.publicKey, entrosAnchorProgId);
+    const [mintPda] = deriveMintPda(user.publicKey, entrosAnchorProgId);
+    const ata = getAssociatedTokenAddressSync(
+      mintPda,
+      user.publicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID,
+    );
+    const currentCommitment = Buffer.alloc(32, 0xdd);
+
+    try {
+      await program.methods
+        .mintAnchor(Array.from(currentCommitment))
+        .accountsStrict({
+          user: user.publicKey,
+          identityState: identityPda,
+          mint: mintPda,
+          mintAuthority: mintAuthorityPda,
+          tokenAccount: ata,
+          associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        .preInstructions([buildMintReceiptIx(user.publicKey, currentCommitment)])
+        .signers([user])
+        .rpc();
+      expect.fail("projection-one mint accepted a legacy receipt");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ReceiptVersionMismatch/);
+    }
+
+    await program.methods
+      .mintAnchor(Array.from(currentCommitment))
+      .accountsStrict({
+        user: user.publicKey,
+        identityState: identityPda,
+        mint: mintPda,
+        mintAuthority: mintAuthorityPda,
+        tokenAccount: ata,
+        associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([
+        buildMintReceiptIx(user.publicKey, currentCommitment, 1),
+      ])
+      .signers([user])
+      .rpc();
+
+    const identity = await program.account.identityState.fetch(identityPda);
+    expect(identity.projectionVersion).to.equal(1);
   });
 
   it("rejects a replayed VerificationResult whose commitment_prev is stale", async () => {
@@ -687,6 +877,7 @@ describe("entros-anchor", () => {
       protocolConfigPda,
       treasuryPda,
       mintAuthorityPda,
+      projectionVersion: 1,
     });
 
     const newCommitment1 = Buffer.from(fixture.public_inputs[0]);
@@ -750,5 +941,311 @@ describe("entros-anchor", () => {
       expect(err).to.exist;
       expect(String(err)).to.match(/PrevCommitmentMismatch|6011/);
     }
+  });
+
+  it("preserves projection state and reputation during wallet migration", async () => {
+    const identityBefore = await program.account.identityState.fetch(
+      migrationIdentityPda,
+    );
+    const newWallet = anchor.web3.Keypair.generate();
+    await airdrop(provider.connection, newWallet.publicKey, 5_000_000_000);
+
+    const oldTokenAccount = getAssociatedTokenAddressSync(
+      migrationMintPda,
+      migrationUser.publicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID,
+    );
+
+    await program.methods
+      .authorizeNewWallet()
+      .accountsStrict({
+        signer: migrationUser.publicKey,
+        identityState: migrationIdentityPda,
+        signerNew: newWallet.publicKey,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        mint: migrationMintPda,
+        tokenAccount: oldTokenAccount,
+      })
+      .signers([migrationUser, newWallet])
+      .rpc();
+
+    const [newIdentityPda] = deriveIdentityPda(
+      newWallet.publicKey,
+      entrosAnchorProgId,
+    );
+    const [newMintPda] = deriveMintPda(
+      newWallet.publicKey,
+      entrosAnchorProgId,
+    );
+    const newTokenAccount = getAssociatedTokenAddressSync(
+      newMintPda,
+      newWallet.publicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID,
+    );
+
+    await program.methods
+      .migrateIdentity()
+      .accountsStrict({
+        user: newWallet.publicKey,
+        identityState: newIdentityPda,
+        mint: newMintPda,
+        mintAuthority: mintAuthorityPda,
+        tokenAccount: newTokenAccount,
+        associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        walletOld: migrationUser.publicKey,
+        identityStateOld: migrationIdentityPda,
+        mintOld: migrationMintPda,
+        tokenAccountOld: oldTokenAccount,
+      })
+      .signers([newWallet])
+      .rpc();
+
+    const identityAfter = await program.account.identityState.fetch(
+      newIdentityPda,
+    );
+    expect(identityAfter.projectionVersion).to.equal(
+      identityBefore.projectionVersion,
+    );
+    expect(identityAfter.lastRebaselineTimestamp.toString()).to.equal(
+      identityBefore.lastRebaselineTimestamp.toString(),
+    );
+    expect(identityAfter.trustScore).to.equal(identityBefore.trustScore);
+    expect(identityAfter.verificationCount).to.equal(
+      identityBefore.verificationCount,
+    );
+    expect(identityAfter.creationTimestamp.toString()).to.equal(
+      identityBefore.creationTimestamp.toString(),
+    );
+
+    migrationUser = newWallet;
+    migrationIdentityPda = newIdentityPda;
+    migrationMintPda = newMintPda;
+  });
+
+  it("derives the current projection during reset and keeps the rebaseline cooldown", async () => {
+    await registry.methods
+      .setProjectionVersions(2, 1)
+      .accountsStrict({
+        admin: provider.wallet.publicKey,
+        protocolConfig: protocolConfigPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const rebaselineCommitment = Buffer.alloc(32, 0xee);
+    try {
+      await program.methods
+        .rebaselineAnchor(Array.from(rebaselineCommitment), 2)
+        .accountsStrict({
+          authority: migrationUser.publicKey,
+          identityState: migrationIdentityPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .preInstructions([
+          buildRebaselineReceiptIx(
+            migrationUser.publicKey,
+            rebaselineCommitment,
+            2,
+          ),
+        ])
+        .signers([migrationUser])
+        .rpc();
+      expect.fail("rebaseline ignored its cooldown after wallet migration");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/RebaselineCooldownActive/);
+    }
+
+    const resetCommitment = Buffer.alloc(32, 0xf0);
+    try {
+      await program.methods
+        .resetIdentityState(Array.from(resetCommitment), 1)
+        .accountsStrict({
+          authority: migrationUser.publicKey,
+          identityState: migrationIdentityPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .remainingAccounts([
+          {
+            pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+            isSigner: false,
+            isWritable: false,
+          },
+        ])
+        .signers([migrationUser])
+        .rpc();
+      expect.fail("reset accepted a stale requested projection version");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ProjectionVersionMismatch/);
+    }
+
+    try {
+      await program.methods
+        .resetIdentityState(Array.from(resetCommitment), 2)
+        .accountsStrict({
+          authority: migrationUser.publicKey,
+          identityState: migrationIdentityPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .remainingAccounts([
+          {
+            pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+            isSigner: false,
+            isWritable: false,
+          },
+        ])
+        .signers([migrationUser])
+        .rpc();
+      expect.fail("reset accepted no validator receipt");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/MissingValidatorReceipt/);
+    }
+
+    try {
+      await program.methods
+        .resetIdentityState(Array.from(resetCommitment), 2)
+        .accountsStrict({
+          authority: migrationUser.publicKey,
+          identityState: migrationIdentityPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .remainingAccounts([
+          {
+            pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+            isSigner: false,
+            isWritable: false,
+          },
+        ])
+        .preInstructions([
+          buildRebaselineReceiptIx(
+            migrationUser.publicKey,
+            resetCommitment,
+            2,
+          ),
+        ])
+        .signers([migrationUser])
+        .rpc();
+      expect.fail("reset accepted a rebaseline receipt");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ReceiptPurposeMismatch/);
+    }
+
+    for (const [invalidReceipt, expectedError] of [
+      [
+        buildResetReceiptIx(
+          anchor.web3.Keypair.generate().publicKey,
+          resetCommitment,
+          2,
+        ),
+        /ReceiptWalletMismatch/,
+      ],
+      [
+        buildResetReceiptIx(migrationUser.publicKey, resetCommitment, 3),
+        /ReceiptProjectionVersionMismatch/,
+      ],
+    ] as const) {
+      try {
+        await program.methods
+          .resetIdentityState(Array.from(resetCommitment), 2)
+          .accountsStrict({
+            authority: migrationUser.publicKey,
+            identityState: migrationIdentityPda,
+            protocolConfig: protocolConfigPda,
+            treasury: treasuryPda,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          })
+          .remainingAccounts([
+            {
+              pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+              isSigner: false,
+              isWritable: false,
+            },
+          ])
+          .preInstructions([invalidReceipt])
+          .signers([migrationUser])
+          .rpc();
+        expect.fail("reset accepted a receipt with the wrong binding");
+      } catch (err: unknown) {
+        expect(String(err)).to.match(expectedError);
+      }
+    }
+
+    try {
+      await program.methods
+        .resetIdentityState(Array.from(resetCommitment), 2)
+        .accountsStrict({
+          authority: migrationUser.publicKey,
+          identityState: migrationIdentityPda,
+          protocolConfig: protocolConfigPda,
+          treasury: treasuryPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .remainingAccounts([
+          {
+            pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+            isSigner: false,
+            isWritable: false,
+          },
+        ])
+        .preInstructions([
+          buildResetReceiptIx(
+            migrationUser.publicKey,
+            resetCommitment,
+            2,
+            1,
+          ),
+        ])
+        .signers([migrationUser])
+        .rpc();
+      expect.fail("reset accepted an expired validator receipt");
+    } catch (err: unknown) {
+      expect(String(err)).to.match(/ReceiptExpired/);
+    }
+
+    await program.methods
+      .resetIdentityState(Array.from(resetCommitment), 2)
+      .accountsStrict({
+        authority: migrationUser.publicKey,
+        identityState: migrationIdentityPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .remainingAccounts([
+        {
+          pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          isSigner: false,
+          isWritable: false,
+        },
+      ])
+      .preInstructions([
+        buildResetReceiptIx(migrationUser.publicKey, resetCommitment, 2),
+      ])
+      .signers([migrationUser])
+      .rpc();
+
+    const identityAfter = await program.account.identityState.fetch(
+      migrationIdentityPda,
+    );
+    expect(identityAfter.projectionVersion).to.equal(2);
+    expect(identityAfter.verificationCount).to.equal(0);
+    expect(identityAfter.trustScore).to.equal(0);
+    expect(Buffer.from(identityAfter.currentCommitment)).to.deep.equal(
+      resetCommitment,
+    );
   });
 });

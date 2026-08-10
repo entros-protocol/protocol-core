@@ -49,7 +49,7 @@ describe("e2e: full Entros verification flow", () => {
   const initialCommitment = Buffer.from(fixture.public_inputs[1]);
   const newCommitment = Buffer.from(fixture.public_inputs[0]);
 
-  it("completes the full Phase 1 flow", async () => {
+  it("completes the full verification flow", async () => {
     // Fund the e2e user
     const sig = await provider.connection.requestAirdrop(
       e2eUser.publicKey,
@@ -57,9 +57,10 @@ describe("e2e: full Entros verification flow", () => {
     );
     await provider.connection.confirmTransaction(sig);
 
-    // 1. Protocol config (already initialized by entros-registry tests — just verify)
+    // 1. Verify the protocol config initialized by the registry tests.
     const config = await registry.account.protocolConfig.fetch(protocolConfigPda);
     expect(config.maxTrustScore).to.equal(10000);
+    const projectionVersion = config.currentProjectionVersion;
 
     // 2. Register a validator (fresh keypair)
     const validatorKeypair = anchor.web3.Keypair.generate();
@@ -121,13 +122,18 @@ describe("e2e: full Entros verification flow", () => {
         instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
       })
       .preInstructions([
-        buildMintReceiptIx(e2eUser.publicKey, initialCommitment),
+        buildMintReceiptIx(
+          e2eUser.publicKey,
+          initialCommitment,
+          projectionVersion,
+        ),
       ])
       .signers([e2eUser])
       .rpc();
 
     let identity = await entrosAnchor.account.identityState.fetch(identityPda);
     expect(identity.verificationCount).to.equal(0);
+    expect(identity.projectionVersion).to.equal(projectionVersion);
 
     // 4. Create verification challenge
     const nonce = Array.from(anchor.web3.Keypair.generate().publicKey.toBytes());
@@ -178,8 +184,8 @@ describe("e2e: full Entros verification flow", () => {
     expect(result.isValid).to.be.true;
 
     // 6. Update anchor with new commitment (trust score auto-computed).
-    // Now requires the VerificationResult PDA + nonce as binding evidence —
-    // without it, the instruction rejects. This is the post-2026-04-20 patch.
+    // The VerificationResult PDA and nonce bind this update to its proof.
+    // The instruction rejects when either value is missing.
     await entrosAnchor.methods
       .updateAnchor(Array.from(newCommitment), nonce)
       .accountsStrict({

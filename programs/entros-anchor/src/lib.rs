@@ -49,7 +49,7 @@ const VERIFIER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 /// Maximum age of a VerificationResult consumed by update_anchor, in seconds.
 /// Bounds the verify-to-consume window separately from challenge_expiry
 /// (which bounds proof-generation-to-verification). 600s = 10 min accommodates
-/// relayer latency without allowing stale proofs to sit indefinitely.
+/// relayer latency without allowing stale proofs to remain valid indefinitely.
 const MAX_PROOF_AGE_SECS: i64 = 600;
 
 const RESET_COOLDOWN_SECS: i64 = 604_800;
@@ -89,8 +89,8 @@ fn record_verification(ring: &mut [i64; 52], now: i64) {
 }
 
 /// Post-patch size of the entros-verifier `VerificationResult` account.
-/// Enforced as a length check in update_anchor — accounts created before the
-/// 2026-04-20 binding patch have the smaller legacy layout (114 bytes) and
+/// Enforced as a length check in update_anchor. Accounts with the legacy
+/// unbound layout are smaller (114 bytes) and
 /// are rejected with `StaleVerificationResult`. Keep in sync with
 /// `entros_verifier::state::VerificationResult::LEN`.
 const VERIFICATION_RESULT_LEN_V2: usize = 182;
@@ -110,23 +110,87 @@ const VR_OFFSET_VERIFIED_AT: usize = 72;
 const VR_OFFSET_COMMITMENT_NEW: usize = 114;
 const VR_OFFSET_COMMITMENT_PREV: usize = 146;
 
-/// Maximum age of a validator-signed mint receipt accepted by mint_anchor
-/// (master-list #146). 5 minutes matches the validator's signing-time
-/// window and gives realistic headroom for slow networks + wallet UX.
+/// Maximum age of a validator-signed receipt accepted by the program.
+/// Five minutes accommodates network and wallet latency.
 const MAX_RECEIPT_AGE_SECS: i64 = 300;
 
 /// Byte offset of `ProtocolConfig.validator_pubkey` (32 bytes). Keep in
 /// sync with `entros_registry::state::ProtocolConfig::OFFSET_VALIDATOR_PUBKEY`.
-/// Reading at this offset requires `data.len() >= 109` — pre-migration
+/// Reading at this offset requires `data.len() >= 109`. Legacy
 /// ProtocolConfig accounts (77 bytes) trip the length guard and leave the
-/// pubkey all-zero, which `verify_mint_receipt` now rejects (fail closed).
+/// pubkey all-zero, which receipt verification rejects (fail closed).
 const PC_OFFSET_VALIDATOR_PUBKEY: usize = 77;
 const PC_LEN_WITH_VALIDATOR_PUBKEY: usize = 109;
+const PC_OFFSET_CURRENT_PROJECTION_VERSION: usize = 109;
+const PC_OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION: usize = 111;
+const PC_LEN_WITH_PROJECTION_POLICY: usize = 113;
 
-/// Length of the validator-signed receipt message:
-///   wallet_pubkey (32) || commitment_new (32) || validated_at i64 LE (8)
-/// Keep in sync with `entros_validation::receipts::RECEIPT_MESSAGE_LEN`.
-const RECEIPT_MESSAGE_LEN: usize = 72;
+const RECEIPT_V1_MESSAGE_LEN: usize = 72;
+const RECEIPT_V2_MESSAGE_LEN: usize = 103;
+const RECEIPT_V2_DOMAIN: &[u8; 28] = b"entros-validator-receipt-v2\0";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+enum ReceiptPurpose {
+    Mint = 1,
+    Rebaseline = 2,
+    Reset = 3,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectionPolicy {
+    current: u16,
+    minimum: u16,
+}
+
+fn read_projection_policy(data: &[u8]) -> Result<ProjectionPolicy> {
+    let policy = if data.len() <= PC_LEN_WITH_VALIDATOR_PUBKEY {
+        ProjectionPolicy {
+            current: 0,
+            minimum: 0,
+        }
+    } else {
+        require!(
+            data.len() >= PC_LEN_WITH_PROJECTION_POLICY,
+            EntrosAnchorError::InvalidProtocolConfig
+        );
+        ProjectionPolicy {
+            current: u16::from_le_bytes([
+                data[PC_OFFSET_CURRENT_PROJECTION_VERSION],
+                data[PC_OFFSET_CURRENT_PROJECTION_VERSION + 1],
+            ]),
+            minimum: u16::from_le_bytes([
+                data[PC_OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION],
+                data[PC_OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION + 1],
+            ]),
+        }
+    };
+    require!(
+        policy.minimum <= policy.current,
+        EntrosAnchorError::InvalidProtocolConfig
+    );
+    Ok(policy)
+}
+
+fn validate_identity_projection(version: u16, policy: ProjectionPolicy) -> Result<()> {
+    require!(
+        version >= policy.minimum,
+        EntrosAnchorError::ProjectionVersionTooOld
+    );
+    require!(
+        version <= policy.current,
+        EntrosAnchorError::ProjectionVersionTooNew
+    );
+    Ok(())
+}
+
+fn validate_requested_projection(version: u16, policy: ProjectionPolicy) -> Result<()> {
+    require!(
+        version == policy.current,
+        EntrosAnchorError::ProjectionVersionMismatch
+    );
+    Ok(())
+}
 
 /// Solana Ed25519Program::verify program ID
 /// (`Ed25519SigVerify111111111111111111111111111`). Hardcoded because
@@ -138,7 +202,7 @@ const ED25519_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 ]);
 
 /// Field offsets in the Ed25519Program::verify instruction header
-/// (16 bytes total). See the Solana docs for the precompile layout —
+/// (16 bytes total). See the Solana documentation for the precompile layout.
 /// these constants pin the parser to the format we expect and make
 /// audit re-reads cheap.
 const ED25519_HEADER_LEN: usize = 16;
@@ -152,13 +216,13 @@ const ED25519_MSG_IX_INDEX_OFFSET: usize = 14;
 /// Sentinel for the *_instruction_index fields meaning "this instruction".
 /// Any other value is a cross-instruction reference, which would let the
 /// signed pubkey or message data live in a different ix while we naively
-/// parse it from this ix's data — closing that door is what defends
+/// parse it from this instruction's data. This restriction defends
 /// against substitution attacks wherever the receipt is enforced (i.e.
 /// whenever `validator_pubkey` is configured).
 const ED25519_IX_INDEX_CURRENT: u16 = 0xFFFF;
 
 /// Integer square root via Newton's method (deterministic, no floating point).
-/// Mirrors entros_registry::isqrt — keep implementations in sync.
+/// Mirrors entros_registry::isqrt. Keep both implementations in sync.
 fn isqrt(n: u64) -> u64 {
     if n == 0 {
         return 0;
@@ -172,28 +236,26 @@ fn isqrt(n: u64) -> u64 {
     x
 }
 
-/// Verify the validator-signed mint receipt embedded as an
-/// `Ed25519Program::verify` instruction preceding the current `mint_anchor`
-/// call (master-list #146).
+/// Verify the validator-signed receipt in the preceding Ed25519 instruction.
 ///
 /// Enforced + fail-closed: any failed check returns the corresponding
 /// Receipt* error, and an unconfigured (all-zero) `validator_pubkey` is
-/// rejected with `ValidatorNotConfigured` rather than skipped — so no
-/// deployment can mint without a verified receipt.
+/// rejected with `ValidatorNotConfigured` rather than skipped. This prevents
+/// any deployment from minting without a verified receipt.
 ///
-/// The receipt message layout matches the validator's canonical form:
-///   `wallet_pubkey (32) || commitment_new (32) || validated_at i64 LE (8) = 72 bytes`
+/// Version 2 binds the domain, purpose, projection version, wallet,
+/// commitment, and timestamp. Legacy mint receipts remain valid only while
+/// the active projection version is zero.
 ///
-/// Solana's Ed25519Program runtime verifies the signature itself before
-/// our instruction runs — if `mint_anchor` is reached AND a preceding
-/// Ed25519 ix exists, the cryptography is already known good. This helper
-/// checks the *binding*: that the right validator signed, that the
-/// signed payload matches the actual mint, and that the receipt is fresh.
-fn verify_mint_receipt(
+/// Solana verifies the signature before this instruction runs. This helper
+/// verifies that the signed payload matches the requested state transition.
+fn verify_validator_receipt(
     instructions_sysvar: &AccountInfo,
     validator_pubkey: &[u8; 32],
     expected_wallet: &Pubkey,
     expected_commitment: &[u8; 32],
+    expected_purpose: ReceiptPurpose,
+    expected_projection_version: u16,
     now: i64,
 ) -> Result<()> {
     use anchor_lang::solana_program::sysvar::instructions::{
@@ -201,7 +263,7 @@ fn verify_mint_receipt(
     };
 
     // Fail closed: an all-zero `validator_pubkey` means ProtocolConfig has no
-    // validator configured — a pre-migration (77-byte) account, or a fresh
+    // validator configured. A legacy 77-byte account or a fresh
     // deployment whose validator was never set. Rather than mint without a
     // verified receipt, reject. `entros_registry::initialize_protocol` now
     // writes a non-zero pubkey atomically at creation and rejects zero, so a
@@ -213,7 +275,7 @@ fn verify_mint_receipt(
 
     let current_index = load_current_index_checked(instructions_sysvar)? as usize;
     if current_index == 0 {
-        msg!("RECEIPT: no preceding instruction (mint_anchor is first in tx)");
+        msg!("RECEIPT: no preceding instruction");
         return Err(EntrosAnchorError::MissingValidatorReceipt.into());
     }
 
@@ -223,7 +285,7 @@ fn verify_mint_receipt(
         return Err(EntrosAnchorError::MissingValidatorReceipt.into());
     }
 
-    // Ed25519Program::verify instruction layout — see ED25519_*_OFFSET
+    // Ed25519Program::verify instruction layout. See ED25519_*_OFFSET
     // constants above. Header is 16 bytes; pubkey/signature/message
     // payloads follow at the offsets the header declares.
     let data = &prev.data;
@@ -246,7 +308,7 @@ fn verify_mint_receipt(
     // *_instruction_index fields that point at OTHER instructions' data;
     // an attacker could verify a legitimately-signed payload in one ix and
     // make this ix's offsets point at a *different* pubkey/message that
-    // we'd naively parse here — bypassing the binding while passing the
+    // we would otherwise parse here, bypassing the binding while passing the
     // signature check. Pinning all three to 0xFFFF (current ix) closes
     // that substitution attack. Tx-builder produces 0xFFFF for inline
     // receipts so legitimate clients are unaffected.
@@ -292,12 +354,8 @@ fn verify_mint_receipt(
         msg!("RECEIPT: Ed25519 ix offsets exceed data length");
         return Err(EntrosAnchorError::MalformedReceiptMessage.into());
     }
-    if message_size != RECEIPT_MESSAGE_LEN {
-        msg!(
-            "RECEIPT: message size {} != expected {}",
-            message_size,
-            RECEIPT_MESSAGE_LEN
-        );
+    if message_size != RECEIPT_V1_MESSAGE_LEN && message_size != RECEIPT_V2_MESSAGE_LEN {
+        msg!("RECEIPT: unsupported message size {}", message_size,);
         return Err(EntrosAnchorError::MalformedReceiptMessage.into());
     }
 
@@ -307,30 +365,75 @@ fn verify_mint_receipt(
         return Err(EntrosAnchorError::ReceiptValidatorMismatch.into());
     }
 
-    let message = &data[message_offset..message_offset + RECEIPT_MESSAGE_LEN];
-    let receipt_wallet = &message[0..32];
-    let receipt_commitment = &message[32..64];
-    let validated_at_bytes: [u8; 8] = message[64..72]
-        .try_into()
-        .expect("slice of 8 bytes is always convertible to [u8; 8]");
-    let validated_at = i64::from_le_bytes(validated_at_bytes);
+    let message = &data[message_offset..message_offset + message_size];
+    verify_receipt_payload(
+        message,
+        expected_wallet,
+        expected_commitment,
+        expected_purpose,
+        expected_projection_version,
+        now,
+    )
+}
 
-    if receipt_wallet != expected_wallet.as_ref() {
-        msg!("RECEIPT: wallet mismatch");
-        return Err(EntrosAnchorError::ReceiptWalletMismatch.into());
-    }
-    if receipt_commitment != expected_commitment {
-        msg!("RECEIPT: commitment mismatch");
-        return Err(EntrosAnchorError::ReceiptCommitmentMismatch.into());
-    }
-    if validated_at > now {
-        msg!("RECEIPT: validated_at is in the future");
-        return Err(EntrosAnchorError::ReceiptFromFuture.into());
-    }
-    if now - validated_at > MAX_RECEIPT_AGE_SECS {
-        msg!("RECEIPT: aged past MAX_RECEIPT_AGE_SECS");
-        return Err(EntrosAnchorError::ReceiptExpired.into());
-    }
+fn verify_receipt_payload(
+    message: &[u8],
+    expected_wallet: &Pubkey,
+    expected_commitment: &[u8; 32],
+    expected_purpose: ReceiptPurpose,
+    expected_projection_version: u16,
+    now: i64,
+) -> Result<()> {
+    let (receipt_wallet, receipt_commitment, validated_at) = match message.len() {
+        RECEIPT_V1_MESSAGE_LEN => {
+            require!(
+                expected_purpose == ReceiptPurpose::Mint && expected_projection_version == 0,
+                EntrosAnchorError::ReceiptVersionMismatch
+            );
+            let validated_at = i64::from_le_bytes(
+                message[64..72]
+                    .try_into()
+                    .map_err(|_| error!(EntrosAnchorError::MalformedReceiptMessage))?,
+            );
+            (&message[0..32], &message[32..64], validated_at)
+        }
+        RECEIPT_V2_MESSAGE_LEN => {
+            require!(
+                &message[0..28] == RECEIPT_V2_DOMAIN,
+                EntrosAnchorError::MalformedReceiptMessage
+            );
+            require!(
+                message[28] == expected_purpose as u8,
+                EntrosAnchorError::ReceiptPurposeMismatch
+            );
+            let projection_version = u16::from_le_bytes([message[29], message[30]]);
+            require!(
+                projection_version == expected_projection_version,
+                EntrosAnchorError::ReceiptProjectionVersionMismatch
+            );
+            let validated_at = i64::from_le_bytes(
+                message[95..103]
+                    .try_into()
+                    .map_err(|_| error!(EntrosAnchorError::MalformedReceiptMessage))?,
+            );
+            (&message[31..63], &message[63..95], validated_at)
+        }
+        _ => return Err(EntrosAnchorError::MalformedReceiptMessage.into()),
+    };
+
+    require!(
+        receipt_wallet == expected_wallet.as_ref(),
+        EntrosAnchorError::ReceiptWalletMismatch
+    );
+    require!(
+        receipt_commitment == expected_commitment,
+        EntrosAnchorError::ReceiptCommitmentMismatch
+    );
+    require!(validated_at <= now, EntrosAnchorError::ReceiptFromFuture);
+    require!(
+        now.saturating_sub(validated_at) <= MAX_RECEIPT_AGE_SECS,
+        EntrosAnchorError::ReceiptExpired
+    );
 
     Ok(())
 }
@@ -505,18 +608,18 @@ pub mod entros_anchor {
         identity.mint = ctx.accounts.mint.key();
         identity.bump = ctx.bumps.identity_state;
         identity.recent_timestamps = [0i64; 52];
-        identity.projection_version = 0;
         identity.last_rebaseline_timestamp = 0;
 
         // Read verification fee from protocol config (cross-program, entros-registry).
         // The accounts struct constrains the PDA address via seeds::program,
-        // but UncheckedAccount skips Anchor's owner validation — assert it
+        // but UncheckedAccount skips Anchor's owner validation. Assert it
         // explicitly at every raw read site.
         require!(
             ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
             EntrosAnchorError::InvalidProtocolConfig
         );
         let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
+        let projection_policy = read_projection_policy(&config_data)?;
         let verification_fee = if config_data.len() >= 69 {
             u64::from_le_bytes([
                 config_data[61],
@@ -531,8 +634,8 @@ pub mod entros_anchor {
         } else {
             0
         };
-        // Read the validator pubkey for mint receipt binding (master-list
-        // #146). Pre-migration ProtocolConfig (77 bytes, before
+        // Read the validator pubkey for mint receipt binding. A
+        // pre-migration ProtocolConfig (77 bytes, before
         // entros-registry::set_validator_pubkey ran) trips the length
         // guard and leaves a zero pubkey, which the verify helper now
         // rejects (fail closed) rather than skipping.
@@ -544,19 +647,22 @@ pub mod entros_anchor {
         }
         drop(config_data);
 
-        // Receipt binding is ENFORCED and fails closed: `verify_mint_receipt`
+        // Receipt binding is enforced and fails closed. Receipt verification
         // returns `Err` (propagated by the `?` below) on a missing, mismatched,
         // stale, or wrong-key receipt, AND on an all-zero `validator_pubkey`
         // (an unconfigured or pre-migration ProtocolConfig). No mint path
         // proceeds without a verified validator receipt.
         let now = Clock::get()?.unix_timestamp;
-        verify_mint_receipt(
+        verify_validator_receipt(
             &ctx.accounts.instructions_sysvar,
             &validator_pubkey,
             &ctx.accounts.user.key(),
             &initial_commitment,
+            ReceiptPurpose::Mint,
+            projection_policy.current,
             now,
         )?;
+        identity.projection_version = projection_policy.current;
 
         // Transfer verification fee from user to protocol treasury
         if verification_fee > 0 {
@@ -755,6 +861,8 @@ pub mod entros_anchor {
         identity.current_commitment = identity_old.current_commitment;
         identity.recent_timestamps = identity_old.recent_timestamps;
         identity.last_reset_timestamp = identity_old.last_reset_timestamp;
+        identity.projection_version = identity_old.projection_version;
+        identity.last_rebaseline_timestamp = identity_old.last_rebaseline_timestamp;
 
         // Read verification fee from protocol config (cross-program, entroRegistry)
         require!(
@@ -830,9 +938,9 @@ pub mod entros_anchor {
     /// Requires a matching, fresh `VerificationResult` PDA (owned by entros-verifier)
     /// whose `commitment_new` equals `new_commitment` and whose `commitment_prev`
     /// equals the identity's current stored commitment. Without this binding the
-    /// instruction would accept any commitment with no biometric proof — allowing
+    /// instruction would accept any commitment without biometric proof, allowing
     /// trust-score farming via per-call fee payment, which contradicts the
-    /// protocol's economic deterrence model. See AUDIT.md for details.
+    /// protocol's economic deterrence model.
     ///
     /// The `verification_nonce` argument supplies the challenge nonce used to
     /// derive the VerificationResult PDA (`seeds = [b"verification", authority, nonce]`).
@@ -895,6 +1003,31 @@ pub mod entros_anchor {
             identity.owner == ctx.accounts.authority.key(),
             EntrosAnchorError::Unauthorized
         );
+
+        require!(
+            ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
+            EntrosAnchorError::InvalidProtocolConfig
+        );
+        let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
+        require!(
+            config_data.len() >= 69,
+            EntrosAnchorError::InvalidProtocolConfig
+        );
+        let projection_policy = read_projection_policy(&config_data)?;
+        validate_identity_projection(identity.projection_version, projection_policy)?;
+        let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
+        let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
+        let verification_fee = u64::from_le_bytes([
+            config_data[61],
+            config_data[62],
+            config_data[63],
+            config_data[64],
+            config_data[65],
+            config_data[66],
+            config_data[67],
+            config_data[68],
+        ]);
+        drop(config_data);
 
         // Cross-program validation of the VerificationResult PDA.
         //
@@ -977,31 +1110,6 @@ pub mod entros_anchor {
 
         record_verification(&mut identity.recent_timestamps, now);
 
-        // Read protocol config (cross-program, entros-registry)
-        // Layout: 8 disc + 32 admin + 8 min_stake + 8 challenge_expiry = offset 56
-        require!(
-            ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
-            EntrosAnchorError::InvalidProtocolConfig
-        );
-        let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
-        require!(
-            config_data.len() >= 69,
-            EntrosAnchorError::InvalidProtocolConfig
-        );
-        let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
-        let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
-        let verification_fee = u64::from_le_bytes([
-            config_data[61],
-            config_data[62],
-            config_data[63],
-            config_data[64],
-            config_data[65],
-            config_data[66],
-            config_data[67],
-            config_data[68],
-        ]);
-        drop(config_data);
-
         // Weekly Bin Activation model (removes daily-farming incentives and rewards span over frequency)
         // Divide the past 84 days (12 weeks) into 12 bins of 7 days each.
         // A bin is active if there is at least one verification timestamp inside its range.
@@ -1025,7 +1133,6 @@ pub mod entros_anchor {
         // NUM_BINS weeks tops out near base * 6.5. This keeps the anti-farming
         // "span over frequency" model (A2) without the unintended ~NUM_BINS-x
         // rescale the un-normalized (NUM_BINS - k) weight produced. See
-        // BLUEPRINT-trust-score-farming-resistance.md §4/§10.
         let mut base_score: u64 = 0;
         for (k, &active) in active_bins.iter().enumerate() {
             if active {
@@ -1097,15 +1204,12 @@ pub mod entros_anchor {
     /// - 7-day cooldown (`RESET_COOLDOWN_SECS`) bounds abuse frequency.
     /// - Full zero of `verification_count`, `trust_score`, and
     ///   `recent_timestamps` means an attacker who compromises the
-    ///   wallet key and passes Tier 1 validation starts from zero.
+    ///   wallet key and passes server-side validation starts from zero.
     /// - Verification fee charged, matching mint/update economics.
     ///
-    /// No ZK proof is consumed: there is no prior fingerprint to
-    /// Hamming-compare against, and the Hamming circuit's
-    /// `min_distance ≥ 3` constraint would reject a same-fingerprint
-    /// proof anyway. Live-humanness evidence comes from the Tier 1
-    /// validation pipeline at the SAS attestation step (handled by
-    /// the off-chain executor, not this instruction).
+    /// Reset does not consume a ZK comparison proof because the client cannot
+    /// recover its prior fingerprint. Versioned projections require a fresh
+    /// validator receipt bound to this wallet, commitment, and reset purpose.
     pub fn reset_identity_state(
         ctx: Context<ResetIdentityState>,
         new_commitment: [u8; 32],
@@ -1124,9 +1228,8 @@ pub mod entros_anchor {
         let now = Clock::get()?.unix_timestamp;
         let new_len = IdentityState::LEN;
 
-        // Migrate: grow legacy accounts (pre-reset layouts at 207 or 543
-        // bytes) to the new 551-byte layout so the extended struct can
-        // deserialize. Zero-fill ensures `last_reset_timestamp` starts at 0.
+        // Grow earlier appended layouts to the current 593-byte layout.
+        // Zero-fill initializes every newly appended field to zero.
         let current_len = identity_info.data_len();
         if current_len < new_len {
             identity_info.resize(new_len)?;
@@ -1160,9 +1263,8 @@ pub mod entros_anchor {
 
         // Cooldown. Legacy accounts have `last_reset_timestamp = 0`
         // (zero-filled during realloc or never written), which means
-        // `elapsed = now` on the first reset — always >> RESET_COOLDOWN_SECS.
-        // This grants every existing identity a free first reset at rollout,
-        // which is the intended behavior.
+        // `elapsed = now` on the first reset, which always exceeds RESET_COOLDOWN_SECS.
+        // This permits the first reset for every existing identity.
         let elapsed = now.saturating_sub(identity.last_reset_timestamp);
         require!(
             elapsed >= RESET_COOLDOWN_SECS,
@@ -1175,9 +1277,10 @@ pub mod entros_anchor {
             ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
             EntrosAnchorError::InvalidProtocolConfig
         );
-        let verification_fee = {
+        let (verification_fee, projection_policy, validator_pubkey) = {
             let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
-            if config_data.len() >= 69 {
+            let projection_policy = read_projection_policy(&config_data)?;
+            let verification_fee = if config_data.len() >= 69 {
                 u64::from_le_bytes([
                     config_data[61],
                     config_data[62],
@@ -1190,8 +1293,43 @@ pub mod entros_anchor {
                 ])
             } else {
                 0
+            };
+            let mut validator_pubkey = [0u8; 32];
+            if config_data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
+                validator_pubkey.copy_from_slice(
+                    &config_data[PC_OFFSET_VALIDATOR_PUBKEY..PC_OFFSET_VALIDATOR_PUBKEY + 32],
+                );
             }
+            (verification_fee, projection_policy, validator_pubkey)
         };
+        validate_requested_projection(projection_version, projection_policy)?;
+
+        if projection_policy.current > 0 {
+            require!(
+                ctx.remaining_accounts.len() == 1,
+                EntrosAnchorError::InvalidResetReceiptAccounts
+            );
+            let instructions_sysvar = &ctx.remaining_accounts[0];
+            require_keys_eq!(
+                *instructions_sysvar.key,
+                anchor_lang::solana_program::sysvar::instructions::id(),
+                EntrosAnchorError::InvalidResetReceiptAccounts
+            );
+            verify_validator_receipt(
+                instructions_sysvar,
+                &validator_pubkey,
+                &ctx.accounts.authority.key(),
+                &new_commitment,
+                ReceiptPurpose::Reset,
+                projection_policy.current,
+                now,
+            )?;
+        } else {
+            require!(
+                ctx.remaining_accounts.is_empty(),
+                EntrosAnchorError::InvalidResetReceiptAccounts
+            );
+        }
 
         identity.current_commitment = new_commitment;
         identity.verification_count = 0;
@@ -1199,7 +1337,7 @@ pub mod entros_anchor {
         identity.recent_timestamps = [0i64; 52];
         identity.last_verification_timestamp = now;
         identity.last_reset_timestamp = now;
-        identity.projection_version = projection_version;
+        identity.projection_version = projection_policy.current;
 
         let mut data = identity_info.try_borrow_mut_data()?;
         identity
@@ -1231,7 +1369,7 @@ pub mod entros_anchor {
 
     /// Write or overwrite the caller's encrypted baseline blob.
     ///
-    /// The blob is opaque to the program — AES-256-GCM ciphertext of the
+    /// The blob is opaque AES-256-GCM ciphertext of the
     /// user's previous SimHash plus salt, produced off-chain in the SDK
     /// under a key derived from a deterministic `signMessage`. The GCM
     /// auth tag binds the blob to (wallet, this PDA's address, on-chain
@@ -1239,14 +1377,14 @@ pub mod entros_anchor {
     /// before a `reset_identity_state` fails authentication under the new
     /// commitment and the SDK falls back to a fresh-capture flow.
     ///
-    /// The program never decrypts the blob — it only stores opaque bytes.
+    /// The program never decrypts the blob. It only stores opaque bytes.
     /// Plaintext biometric data never reaches chain at any point.
     ///
     /// Guards:
     ///   * Signer must equal the wallet that seeds the EncryptedBaseline
     ///     PDA (enforced by the seeds constraint on the Accounts struct).
     ///   * The caller's IdentityState PDA at `[b"identity", signer]` must
-    ///     already exist — pre-mint attempts are rejected with
+    ///     already exist. Pre-mint attempts are rejected with
     ///     `IdentityStateNotFound`. Anchor's seeds constraint validates the
     ///     PDA address; the `data_len() > 0` check confirms initialization.
     pub fn set_encrypted_baseline(
@@ -1324,19 +1462,12 @@ pub mod entros_anchor {
             EntrosAnchorError::Unauthorized
         );
 
-        // Verify cooldown
-        let elapsed = now.saturating_sub(identity.last_rebaseline_timestamp);
-        require!(
-            elapsed >= REBASELINE_COOLDOWN_SECS,
-            EntrosAnchorError::RebaselineCooldownActive
-        );
-
-        // Read config parameters
         require!(
             ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
             EntrosAnchorError::InvalidProtocolConfig
         );
         let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
+        let projection_policy = read_projection_policy(&config_data)?;
         let verification_fee = if config_data.len() >= 69 {
             u64::from_le_bytes([
                 config_data[61],
@@ -1358,19 +1489,31 @@ pub mod entros_anchor {
             );
         }
         drop(config_data);
+        validate_requested_projection(projection_version, projection_policy)?;
 
-        // Verify validator-signed receipt
-        verify_mint_receipt(
+        require!(
+            identity.projection_version < projection_policy.current,
+            EntrosAnchorError::ProjectionVersionNotAdvanced
+        );
+
+        let elapsed = now.saturating_sub(identity.last_rebaseline_timestamp);
+        require!(
+            elapsed >= REBASELINE_COOLDOWN_SECS,
+            EntrosAnchorError::RebaselineCooldownActive
+        );
+
+        verify_validator_receipt(
             &ctx.accounts.instructions_sysvar,
             &validator_pubkey,
             &ctx.accounts.authority.key(),
             &new_commitment,
+            ReceiptPurpose::Rebaseline,
+            projection_policy.current,
             now,
         )?;
 
-        // Update state
         identity.current_commitment = new_commitment;
-        identity.projection_version = projection_version;
+        identity.projection_version = projection_policy.current;
         identity.last_rebaseline_timestamp = now;
         identity.last_verification_timestamp = now;
 
@@ -1398,7 +1541,7 @@ pub mod entros_anchor {
         emit!(AnchorRebaselined {
             owner: identity.owner,
             commitment: new_commitment,
-            projection_version,
+            projection_version: projection_policy.current,
         });
 
         Ok(())
@@ -1563,7 +1706,7 @@ pub struct MintAnchor<'info> {
     pub treasury: UncheckedAccount<'info>,
 
     /// CHECK: Solana Instructions sysvar. Read-only access used by mint
-    /// receipt verification (master-list #146 Phase 3) to inspect the
+    /// receipt verification to inspect the
     /// preceding Ed25519Program::verify instruction in the same tx.
     /// Address is constrained to the canonical sysvar pubkey, so the
     /// program is guaranteed to be reading the real sysvar regardless of
@@ -1591,7 +1734,7 @@ pub struct UpdateAnchor<'info> {
     /// CHECK: Cross-program read of entros-verifier VerificationResult PDA.
     /// PDA seeds validated by Anchor; layout + owner + cross-field constraints
     /// validated in instruction body. Binds the ZK proof to this specific
-    /// update — without this account, update_anchor would accept any commitment
+    /// update. Without this account, update_anchor would accept any commitment
     /// with no proof.
     #[account(
         seeds = [b"verification", authority.key().as_ref(), verification_nonce.as_ref()],
@@ -1665,7 +1808,7 @@ pub struct SetEncryptedBaseline<'info> {
 
     /// CHECK: Existence verified by `data_len() > 0` in the handler.
     /// UncheckedAccount because we only need to verify the IdentityState
-    /// PDA exists at the expected address — we don't need to deserialize
+    /// PDA exists at the expected address. We do not need to deserialize
     /// its fields. The seeds constraint validates the PDA address.
     #[account(
         seeds = [b"identity", authority.key().as_ref()],
@@ -1773,9 +1916,186 @@ pub struct AnchorRebaselined {
 
 #[cfg(test)]
 mod tests {
-    use super::{record_verification, BIN_SIZE_SECS};
+    use super::{
+        read_projection_policy, record_verification, validate_identity_projection,
+        validate_requested_projection, verify_receipt_payload, ProjectionPolicy, ReceiptPurpose,
+        BIN_SIZE_SECS, MAX_RECEIPT_AGE_SECS, RECEIPT_V1_MESSAGE_LEN, RECEIPT_V2_DOMAIN,
+        RECEIPT_V2_MESSAGE_LEN,
+    };
+    use anchor_lang::prelude::Pubkey;
 
     const T0: i64 = 1_700_000_000;
+
+    fn receipt_v2(
+        wallet: Pubkey,
+        commitment: [u8; 32],
+        purpose: ReceiptPurpose,
+        projection_version: u16,
+        validated_at: i64,
+    ) -> [u8; RECEIPT_V2_MESSAGE_LEN] {
+        let mut receipt = [0u8; RECEIPT_V2_MESSAGE_LEN];
+        receipt[0..28].copy_from_slice(RECEIPT_V2_DOMAIN);
+        receipt[28] = purpose as u8;
+        receipt[29..31].copy_from_slice(&projection_version.to_le_bytes());
+        receipt[31..63].copy_from_slice(wallet.as_ref());
+        receipt[63..95].copy_from_slice(&commitment);
+        receipt[95..103].copy_from_slice(&validated_at.to_le_bytes());
+        receipt
+    }
+
+    #[test]
+    fn legacy_protocol_config_defaults_to_projection_zero() {
+        let data = [0u8; 109];
+        let policy = read_projection_policy(&data).expect("legacy policy");
+        assert_eq!(policy.current, 0);
+        assert_eq!(policy.minimum, 0);
+    }
+
+    #[test]
+    fn partial_or_inverted_projection_policy_is_rejected() {
+        assert!(read_projection_policy(&[0u8; 111]).is_err());
+
+        let mut data = [0u8; 113];
+        data[109..111].copy_from_slice(&2u16.to_le_bytes());
+        data[111..113].copy_from_slice(&3u16.to_le_bytes());
+        assert!(read_projection_policy(&data).is_err());
+    }
+
+    #[test]
+    fn identity_projection_must_stay_inside_the_configured_window() {
+        let policy = ProjectionPolicy {
+            current: 4,
+            minimum: 2,
+        };
+        assert!(validate_identity_projection(1, policy).is_err());
+        assert!(validate_identity_projection(2, policy).is_ok());
+        assert!(validate_identity_projection(4, policy).is_ok());
+        assert!(validate_identity_projection(5, policy).is_err());
+    }
+
+    #[test]
+    fn requested_projection_must_equal_the_configured_current_version() {
+        let policy = ProjectionPolicy {
+            current: 4,
+            minimum: 2,
+        };
+        assert!(validate_requested_projection(4, policy).is_ok());
+        assert!(validate_requested_projection(3, policy).is_err());
+        assert!(validate_requested_projection(5, policy).is_err());
+    }
+
+    #[test]
+    fn receipt_v2_binds_purpose_and_projection_version() {
+        let wallet = Pubkey::new_unique();
+        let commitment = [7u8; 32];
+        let now = T0;
+        let receipt = receipt_v2(wallet, commitment, ReceiptPurpose::Rebaseline, 3, now);
+
+        assert!(verify_receipt_payload(
+            &receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Rebaseline,
+            3,
+            now,
+        )
+        .is_ok());
+        assert!(verify_receipt_payload(
+            &receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Mint,
+            3,
+            now,
+        )
+        .is_err());
+
+        let reset_receipt = receipt_v2(wallet, commitment, ReceiptPurpose::Reset, 3, now);
+        assert!(verify_receipt_payload(
+            &reset_receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Reset,
+            3,
+            now,
+        )
+        .is_ok());
+        assert!(verify_receipt_payload(
+            &reset_receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Rebaseline,
+            3,
+            now,
+        )
+        .is_err());
+        assert!(verify_receipt_payload(
+            &reset_receipt,
+            &Pubkey::new_unique(),
+            &commitment,
+            ReceiptPurpose::Reset,
+            3,
+            now,
+        )
+        .is_err());
+        assert!(verify_receipt_payload(
+            &reset_receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Reset,
+            3,
+            now + MAX_RECEIPT_AGE_SECS + 1,
+        )
+        .is_err());
+        assert!(verify_receipt_payload(
+            &receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Rebaseline,
+            4,
+            now,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn legacy_receipt_is_limited_to_projection_zero_minting() {
+        let wallet = Pubkey::new_unique();
+        let commitment = [9u8; 32];
+        let now = T0;
+        let mut receipt = [0u8; RECEIPT_V1_MESSAGE_LEN];
+        receipt[0..32].copy_from_slice(wallet.as_ref());
+        receipt[32..64].copy_from_slice(&commitment);
+        receipt[64..72].copy_from_slice(&now.to_le_bytes());
+
+        assert!(verify_receipt_payload(
+            &receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Mint,
+            0,
+            now,
+        )
+        .is_ok());
+        assert!(verify_receipt_payload(
+            &receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Mint,
+            1,
+            now,
+        )
+        .is_err());
+        assert!(verify_receipt_payload(
+            &receipt,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Rebaseline,
+            0,
+            now,
+        )
+        .is_err());
+    }
 
     #[test]
     fn first_verification_fills_the_newest_slot() {
