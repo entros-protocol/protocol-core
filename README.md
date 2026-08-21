@@ -23,16 +23,19 @@ Minting requires a validator-signed Ed25519 receipt. The receipt binds the walle
 ## Setup
 
 ```bash
-# Prerequisites: Rust, Solana CLI 2.2.1, Anchor CLI 0.32.1, Node.js 24 or later
+# Prerequisites: Rust 1.91.0, Solana CLI 2.2.1, Anchor CLI 0.32.1, Node.js 24.15.0
 
 # Install dependencies
-npm install
+npm ci
 
 # Build all programs
 anchor build
 
-# Run the Anchor integration suite
-anchor test
+# Run the isolated Anchor integration suite
+npm run test:localnet
+
+# Run all LiteSVM suites
+npm run test:litesvm
 
 # Upgrade all three devnet programs with the registered admin authority
 sh scripts/upgrade-devnet.sh
@@ -41,7 +44,14 @@ sh scripts/upgrade-devnet.sh
 ## Tests
 
 ```bash
-anchor test
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+npm run typecheck
+anchor build --no-idl -- -- --locked
+anchor build
+npm run test:localnet
+npm run test:litesvm
 ```
 
 The integration suite covers:
