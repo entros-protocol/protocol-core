@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { AnchorProvider } from "@coral-xyz/anchor";
 import { web3 } from "@coral-xyz/anchor";
 
 type PublicKey = web3.PublicKey;
@@ -159,7 +160,7 @@ export const deriveVerificationPda = (
  *
  * The initial commitment is set to the fixture's commitment_prev so that
  * the subsequent update_anchor (with new_commitment = fixture's commitment_new)
- * passes the binding check. Caller airdrops SOL to `user` before invoking.
+ * passes the binding check. The caller funds `user` before invoking.
  *
  * Returns everything the caller needs to build the updateAnchor instruction.
  */
@@ -271,13 +272,19 @@ export async function bootstrapVerifiedUser(params: {
 }
 
 /**
- * Airdrop and wait for confirmation.
+ * Fund a test account from the isolated provider wallet.
  */
-export async function airdrop(
-  connection: web3.Connection,
+export async function fundAccount(
+  provider: AnchorProvider,
   pubkey: PublicKey,
   lamports: number,
 ): Promise<void> {
-  const sig = await connection.requestAirdrop(pubkey, lamports);
-  await connection.confirmTransaction(sig, "confirmed");
+  const transaction = new web3.Transaction().add(
+    web3.SystemProgram.transfer({
+      fromPubkey: provider.wallet.publicKey,
+      toPubkey: pubkey,
+      lamports,
+    }),
+  );
+  await provider.sendAndConfirm(transaction);
 }

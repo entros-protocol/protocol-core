@@ -1,11 +1,9 @@
-/* Build the Solana programs first:
-$ anchor build
-Then run with NodeJs v26.0.0 (or v22.18.0+):
-$ node ./tests-litesvm-ts/encrypted-baseline-tests.ts
+/* Build the Solana programs with `anchor build` first.
+Run this suite with Node 24.15.0.
 
-Tests for master-list #98 — separate EncryptedBaseline PDA design.
+This suite verifies the separate EncryptedBaseline PDA design.
 Verifies:
-  1. Pre-mint guard rejects with IdentityStateNotFound (6022)
+  1. Pre-mint guard rejects with IdentityStateNotFound (6023)
   2. Init creates PDA at the derived seeds with correct blob + bump
   3. Update overwrites existing blob without creating a new account
   4. Different wallets target different PDAs (one cannot overwrite another)
@@ -163,11 +161,11 @@ test("setup: initializeProtocol + setValidatorPubkey + mint user1's identity", a
   expect(identityAcct).to.not.equal(null);
 });
 
-test("encrypted-baseline: pre-mint guard rejects hackerKp with IdentityStateNotFound (6022)", async () => {
+test("encrypted-baseline: pre-mint guard rejects hackerKp with IdentityStateNotFound (6023)", async () => {
   // hackerKp has never minted, so its IdentityState PDA does not exist.
   const blob = new Uint8Array(96).fill(0x42);
   const expectedErr =
-    "Error Number: 6022. Error Message: set_encrypted_baseline called before mint_anchor";
+    "Error Number: 6023. Error Message: set_encrypted_baseline called before mint_anchor";
   setEncryptedBaseline(hackerKp, blob, expectedErr);
 });
 
