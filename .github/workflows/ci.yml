@@ -76,9 +76,6 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Verify TypeScript
-        run: npm run typecheck
-
       - name: Verify Rust source
         shell: bash
         run: |
@@ -121,13 +118,21 @@ jobs:
           solana --version | grep --fixed-strings "solana-cli $(jq -r '.solana.version' ci-toolchain.json)"
           test "$(anchor --version)" = "anchor-cli $(jq -r '.anchor.version' ci-toolchain.json)"
 
-      - name: Build and test the programs
+      - name: Build the programs
         shell: bash
         run: |
           set -euo pipefail
           anchor build --no-idl -- -- --locked
           anchor build
           git diff --exit-code -- Cargo.lock
+
+      - name: Verify TypeScript
+        run: npm run typecheck
+
+      - name: Test the programs
+        shell: bash
+        run: |
+          set -euo pipefail
           npm run test:localnet
           npm run test:litesvm
 
