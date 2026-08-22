@@ -258,9 +258,7 @@ fn verify_validator_receipt(
     expected_projection_version: u16,
     now: i64,
 ) -> Result<()> {
-    use anchor_lang::solana_program::sysvar::instructions::{
-        load_current_index_checked, load_instruction_at_checked,
-    };
+    use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 
     // Fail closed: an all-zero `validator_pubkey` means ProtocolConfig has no
     // validator configured. A legacy 77-byte account or a fresh
@@ -491,7 +489,7 @@ pub mod entros_anchor {
         msg!("create_account on mint");
         system_program::create_account(
             CpiContext::new_with_signer(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::CreateAccount {
                     from: ctx.accounts.user.to_account_info(),
                     to: ctx.accounts.mint.to_account_info(),
@@ -548,7 +546,7 @@ pub mod entros_anchor {
         msg!("token_metadata_initialize");
         token_metadata_initialize(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 TokenMetadataInitialize {
                     mint: ctx.accounts.mint.to_account_info(),
                     program_id: ctx.accounts.token_program.to_account_info(),
@@ -567,7 +565,7 @@ pub mod entros_anchor {
         #[cfg(feature = "debug-logs")]
         msg!("create user ata");
         anchor_spl::associated_token::create(CpiContext::new(
-            ctx.accounts.associated_token_program.to_account_info(),
+            ctx.accounts.associated_token_program.key(),
             anchor_spl::associated_token::Create {
                 payer: ctx.accounts.user.to_account_info(),
                 associated_token: ctx.accounts.token_account.to_account_info(),
@@ -583,7 +581,7 @@ pub mod entros_anchor {
         msg!("mint 1 token");
         token_2022::mint_to(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 token_2022::MintTo {
                     mint: ctx.accounts.mint.to_account_info(),
                     to: ctx.accounts.token_account.to_account_info(),
@@ -668,7 +666,7 @@ pub mod entros_anchor {
         if verification_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.user.to_account_info(),
                         to: ctx.accounts.treasury.to_account_info(),
@@ -697,7 +695,7 @@ pub mod entros_anchor {
             delegate: ctx.accounts.signer_new.to_account_info(),
             authority: ctx.accounts.signer.to_account_info(),
         };
-        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_program = ctx.accounts.token_program.key();
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
         token_2022::approve(cpi_ctx, 1)?;
         Ok(())
@@ -737,7 +735,7 @@ pub mod entros_anchor {
         msg!("create_account on mint");
         system_program::create_account(
             CpiContext::new_with_signer(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::CreateAccount {
                     from: ctx.accounts.user.to_account_info(),
                     to: ctx.accounts.mint.to_account_info(),
@@ -794,7 +792,7 @@ pub mod entros_anchor {
         msg!("token_metadata_initialize");
         token_metadata_initialize(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 TokenMetadataInitialize {
                     mint: ctx.accounts.mint.to_account_info(),
                     program_id: ctx.accounts.token_program.to_account_info(),
@@ -813,7 +811,7 @@ pub mod entros_anchor {
         #[cfg(feature = "debug-logs")]
         msg!("create user ata");
         anchor_spl::associated_token::create(CpiContext::new(
-            ctx.accounts.associated_token_program.to_account_info(),
+            ctx.accounts.associated_token_program.key(),
             anchor_spl::associated_token::Create {
                 payer: ctx.accounts.user.to_account_info(),
                 associated_token: ctx.accounts.token_account.to_account_info(),
@@ -829,7 +827,7 @@ pub mod entros_anchor {
         msg!("mint 1 token");
         token_2022::mint_to(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 token_2022::MintTo {
                     mint: ctx.accounts.mint.to_account_info(),
                     to: ctx.accounts.token_account.to_account_info(),
@@ -890,7 +888,7 @@ pub mod entros_anchor {
         if migration_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.user.to_account_info(),
                         to: ctx.accounts.treasury.to_account_info(),
@@ -906,14 +904,14 @@ pub mod entros_anchor {
             from: ctx.accounts.token_account_old.to_account_info(),
             authority: ctx.accounts.user.to_account_info(),
         };
-        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_program = ctx.accounts.token_program.key();
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
         burn(cpi_ctx, 1)?;
 
         #[cfg(feature = "debug-logs")]
         msg!("Close the old mint account");
         close_account(CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             CloseAccount {
                 account: ctx.accounts.mint_old.to_account_info(),
                 destination: ctx.accounts.user.to_account_info(),
@@ -980,7 +978,7 @@ pub mod entros_anchor {
             if required > current_lamports {
                 system_program::transfer(
                     CpiContext::new(
-                        ctx.accounts.system_program.to_account_info(),
+                        ctx.accounts.system_program.key(),
                         system_program::Transfer {
                             from: ctx.accounts.authority.to_account_info(),
                             to: identity_info.to_account_info(),
@@ -1170,7 +1168,7 @@ pub mod entros_anchor {
         if verification_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.authority.to_account_info(),
                         to: ctx.accounts.treasury.to_account_info(),
@@ -1239,7 +1237,7 @@ pub mod entros_anchor {
             if required > current_lamports {
                 system_program::transfer(
                     CpiContext::new(
-                        ctx.accounts.system_program.to_account_info(),
+                        ctx.accounts.system_program.key(),
                         system_program::Transfer {
                             from: ctx.accounts.authority.to_account_info(),
                             to: identity_info.to_account_info(),
@@ -1312,7 +1310,7 @@ pub mod entros_anchor {
             let instructions_sysvar = &ctx.remaining_accounts[0];
             require_keys_eq!(
                 *instructions_sysvar.key,
-                anchor_lang::solana_program::sysvar::instructions::id(),
+                solana_instructions_sysvar::id(),
                 EntrosAnchorError::InvalidResetReceiptAccounts
             );
             verify_validator_receipt(
@@ -1348,7 +1346,7 @@ pub mod entros_anchor {
         if verification_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.authority.to_account_info(),
                         to: ctx.accounts.treasury.to_account_info(),
@@ -1440,7 +1438,7 @@ pub mod entros_anchor {
             if required > current_lamports {
                 system_program::transfer(
                     CpiContext::new(
-                        ctx.accounts.system_program.to_account_info(),
+                        ctx.accounts.system_program.key(),
                         system_program::Transfer {
                             from: ctx.accounts.authority.to_account_info(),
                             to: identity_info.to_account_info(),
@@ -1528,7 +1526,7 @@ pub mod entros_anchor {
         if verification_fee > 0 {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.authority.to_account_info(),
                         to: ctx.accounts.treasury.to_account_info(),
@@ -1711,7 +1709,7 @@ pub struct MintAnchor<'info> {
     /// Address is constrained to the canonical sysvar pubkey, so the
     /// program is guaranteed to be reading the real sysvar regardless of
     /// what the client passes.
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::id())]
+    #[account(address = solana_instructions_sysvar::id())]
     pub instructions_sysvar: UncheckedAccount<'info>,
 }
 
@@ -1866,7 +1864,7 @@ pub struct RebaselineAnchor<'info> {
 
     /// CHECK: Solana instructions sysvar. Required to verify the preceding
     /// Ed25519Program::verify instruction containing the validator-signed receipt.
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::id())]
+    #[account(address = solana_instructions_sysvar::id())]
     pub instructions_sysvar: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,

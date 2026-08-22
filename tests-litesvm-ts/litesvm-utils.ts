@@ -35,11 +35,18 @@ import {
 
 export let svm = new LiteSVM();
 export const zero = BigInt(0);
-export const ownerKp = new Keypair();
-export const adminKp = new Keypair();
-export const admin2Kp = new Keypair();
-export const user1Kp = new Keypair();
-export const hackerKp = new Keypair();
+export const deterministicKeypair = (seedByte: number): Keypair => {
+  if (!Number.isInteger(seedByte) || seedByte < 0 || seedByte > 255) {
+    throw new Error("test key seed must be a byte");
+  }
+  return Keypair.fromSeed(new Uint8Array(32).fill(seedByte));
+};
+
+export const ownerKp = deterministicKeypair(1);
+export const adminKp = deterministicKeypair(2);
+export const admin2Kp = deterministicKeypair(3);
+export const user1Kp = deterministicKeypair(4);
+export const hackerKp = deterministicKeypair(5);
 
 // Shared mint-receipt validator. `initializeProtocol` defaults the on-chain
 // ProtocolConfig.validator_pubkey to this key, and `mintAnchor` signs the
@@ -47,7 +54,7 @@ export const hackerKp = new Keypair();
 // the on-chain receipt binding without each test wiring its own key. Suites
 // that need their own validator (mint-receipt-tests, encrypted-baseline-tests)
 // pass an explicit validator_pubkey and build their own receipts.
-export const LITESVM_VALIDATOR = new Keypair();
+export const LITESVM_VALIDATOR = deterministicKeypair(6);
 
 export const owner = ownerKp.publicKey;
 export const admin = adminKp.publicKey;

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AnchorProvider } from "@coral-xyz/anchor";
-import { web3 } from "@coral-xyz/anchor";
+import type { AnchorProvider } from "@anchor-lang/core";
+import { web3 } from "@anchor-lang/core";
 
 type PublicKey = web3.PublicKey;
 

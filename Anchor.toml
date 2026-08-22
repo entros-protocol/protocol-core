@@ -1,6 +1,6 @@
 [toolchain]
-anchor_version = "0.32.1"
-solana_version = "2.2.1"
+anchor_version = "1.1.2"
+solana_version = "3.1.10"
 
 [features]
 resolution = true
@@ -15,9 +15,6 @@ entros_registry = "6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW"
 entros_anchor = "GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2"
 entros_verifier = "4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV"
 entros_registry = "6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW"
-
-[registry]
-url = "https://api.apr.dev"
 
 [provider]
 cluster = "Localnet"

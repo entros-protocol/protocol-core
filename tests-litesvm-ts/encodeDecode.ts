@@ -31,7 +31,7 @@ import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 
 //-----------== Basic settings
 export const anchorAddr = new PublicKey(
@@ -82,8 +82,6 @@ export const loadProofFixture = () =>
     fs.readFileSync(path.resolve("tests/fixtures/test_proof.json"), "utf-8"),
   );
 
-export const generateNonce = (): number[] =>
-  Array.from(Keypair.generate().publicKey.toBytes());
 export const deriveChallengePda = (challenger: PublicKey, nonce: number[]) =>
   PublicKey.findProgramAddressSync(
     [Buffer.from("challenge"), challenger.toBuffer(), Buffer.from(nonce)],
@@ -125,7 +123,7 @@ export const getPdas = (
 ): Pdas => {
   const [identityPda] = deriveIdentityPda(signer);
   const [mintPda] = deriveMintPda(signer);
-  const nonce = generateNonce();
+  const nonce = Array.from(signer.toBytes());
   const [challengePda] = deriveChallengePda(signer, nonce);
   const [verificationPda] = deriveVerificationPda(signer, nonce);
   const ata = getAta(mintPda, signer, false, tokenProgram);
