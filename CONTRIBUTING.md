@@ -34,8 +34,11 @@ cargo test --workspace --all-features --locked
 
 **TypeScript**
 
+Generate the Anchor types before TypeScript checks in a clean checkout.
+
 ```bash
 npm ci
+anchor build
 npm run typecheck
 ```
 

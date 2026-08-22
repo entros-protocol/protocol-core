@@ -47,9 +47,9 @@ sh scripts/upgrade-devnet.sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
-npm run typecheck
 anchor build --no-idl -- -- --locked
 anchor build
+npm run typecheck
 npm run test:localnet
 npm run test:litesvm
 ```
