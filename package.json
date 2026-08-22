@@ -2,11 +2,16 @@
   "name": "protocol-core",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.12.1",
   "engines": {
-    "node": ">=20 <26"
+    "node": ">=24.15.0 <25",
+    "npm": "11.12.1"
   },
   "scripts": {
     "test": "anchor test",
+    "typecheck": "tsc --noEmit",
+    "test:localnet": "bash ./scripts/test-localnet.sh",
+    "test:litesvm": "bash ./scripts/test-litesvm.sh",
     "litesvm-transfer-sol": "node ./tests-litesvm-ts/transfer-sol.ts",
     "litesvm-coverage": "node ./tests-litesvm-ts/test-coverage.ts",
     "litesvm-trustscore": "node ./tests-litesvm-ts/clock-tests.ts",
@@ -33,6 +38,7 @@
     "@types/bn.js": "^5.2.0",
     "@types/chai": "^4.3.0",
     "@types/mocha": "^10.0.10",
+    "@types/node": "24.13.3",
     "chai": "^4.5.0",
     "litesvm": "^0.7.0",
     "mocha": "^10.8.2",

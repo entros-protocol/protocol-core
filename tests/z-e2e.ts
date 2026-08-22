@@ -8,7 +8,7 @@ import {
 import type { EntrosRegistry } from "../target/types/entros_registry";
 import type { EntrosAnchor } from "../target/types/entros_anchor";
 import type { EntrosVerifier } from "../target/types/entros_verifier";
-import { buildMintReceiptIx, loadProofFixture } from "./utils";
+import { buildMintReceiptIx, fundAccount, loadProofFixture } from "./utils";
 
 const fixture = loadProofFixture();
 
@@ -51,11 +51,11 @@ describe("e2e: full Entros verification flow", () => {
 
   it("completes the full verification flow", async () => {
     // Fund the e2e user
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       e2eUser.publicKey,
       10_000_000_000
     );
-    await provider.connection.confirmTransaction(sig);
 
     // 1. Verify the protocol config initialized by the registry tests.
     const config = await registry.account.protocolConfig.fetch(protocolConfigPda);
@@ -64,11 +64,11 @@ describe("e2e: full Entros verification flow", () => {
 
     // 2. Register a validator (fresh keypair)
     const validatorKeypair = anchor.web3.Keypair.generate();
-    const airdropSig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       validatorKeypair.publicKey,
       5_000_000_000
     );
-    await provider.connection.confirmTransaction(airdropSig);
 
     const [validatorStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("validator"), validatorKeypair.publicKey.toBuffer()],

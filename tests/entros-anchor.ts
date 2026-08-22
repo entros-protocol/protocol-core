@@ -11,13 +11,13 @@ import type { EntrosAnchor } from "../target/types/entros_anchor";
 import type { EntrosRegistry } from "../target/types/entros_registry";
 import type { EntrosVerifier } from "../target/types/entros_verifier";
 import {
-  airdrop,
   bootstrapVerifiedUser,
   buildMintReceiptIx,
   buildRebaselineReceiptIx,
   buildResetReceiptIx,
   deriveIdentityPda,
   deriveMintPda,
+  fundAccount,
   loadProofFixture,
   TEST_VALIDATOR,
 } from "./utils";
@@ -165,11 +165,11 @@ describe("entros-anchor", () => {
 
   it("allows different users to mint their own identity", async () => {
     const user2 = anchor.web3.Keypair.generate();
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       user2.publicKey,
       5_000_000_000,
     );
-    await provider.connection.confirmTransaction(sig);
 
     const [identityPda] = deriveIdentityPda(
       user2.publicKey,
@@ -211,7 +211,7 @@ describe("entros-anchor", () => {
     // enforces: a mint_anchor with no preceding Ed25519 receipt instruction
     // must be rejected (MissingValidatorReceipt), never silently allowed.
     const user3 = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, user3.publicKey, 2_000_000_000);
+    await fundAccount(provider, user3.publicKey, 2_000_000_000);
     const [identityPda] = deriveIdentityPda(user3.publicKey, entrosAnchorProgId);
     const [mintPda] = deriveMintPda(user3.publicKey, entrosAnchorProgId);
     const ata = getAssociatedTokenAddressSync(
@@ -249,7 +249,7 @@ describe("entros-anchor", () => {
   it("updates identity state with bound proof + auto-computed trust score", async () => {
     const fixture = loadProofFixture();
     const user = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, user.publicKey, 3_000_000_000);
+    await fundAccount(provider, user.publicKey, 3_000_000_000);
 
     const boot = await bootstrapVerifiedUser({
       user,
@@ -291,7 +291,7 @@ describe("entros-anchor", () => {
     // Victim sets up a legit identity + VR
     const fixture = loadProofFixture();
     const victim = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, victim.publicKey, 3_000_000_000);
+    await fundAccount(provider, victim.publicKey, 3_000_000_000);
     const boot = await bootstrapVerifiedUser({
       user: victim,
       entrosAnchor: program,
@@ -306,7 +306,7 @@ describe("entros-anchor", () => {
     // VerificationResult seeds derivation (attacker.pubkey != VR.verifier) and
     // at the Unauthorized ownership check.
     const attacker = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, attacker.publicKey, 2_000_000_000);
+    await fundAccount(provider, attacker.publicKey, 2_000_000_000);
     const fakeCommitment = Buffer.from(fixture.public_inputs[0]);
 
     try {
@@ -342,7 +342,7 @@ describe("entros-anchor", () => {
     try {
       const fixture = loadProofFixture();
       const user = anchor.web3.Keypair.generate();
-      await airdrop(provider.connection, user.publicKey, 3_000_000_000);
+      await fundAccount(provider, user.publicKey, 3_000_000_000);
 
       const boot = await bootstrapVerifiedUser({
         user,
@@ -392,7 +392,7 @@ describe("entros-anchor", () => {
   it("rejects reusing the same VerificationResult twice", async () => {
     const fixture = loadProofFixture();
     const user = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, user.publicKey, 3_000_000_000);
+    await fundAccount(provider, user.publicKey, 3_000_000_000);
 
     const boot = await bootstrapVerifiedUser({
       user,
@@ -449,7 +449,7 @@ describe("entros-anchor", () => {
   it("rejects update where submitted new_commitment doesn't match VR.commitment_new", async () => {
     const fixture = loadProofFixture();
     const user = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, user.publicKey, 3_000_000_000);
+    await fundAccount(provider, user.publicKey, 3_000_000_000);
 
     const boot = await bootstrapVerifiedUser({
       user,
@@ -488,7 +488,7 @@ describe("entros-anchor", () => {
     const fixture = loadProofFixture();
     // User A bootstraps their own VR
     const userA = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, userA.publicKey, 3_000_000_000);
+    await fundAccount(provider, userA.publicKey, 3_000_000_000);
     const bootA = await bootstrapVerifiedUser({
       user: userA,
       entrosAnchor: program,
@@ -501,7 +501,7 @@ describe("entros-anchor", () => {
 
     // User B mints independently
     const userB = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, userB.publicKey, 3_000_000_000);
+    await fundAccount(provider, userB.publicKey, 3_000_000_000);
     const [identityPdaB] = deriveIdentityPda(
       userB.publicKey,
       entrosAnchorProgId,
@@ -573,11 +573,11 @@ describe("entros-anchor", () => {
     );
 
     const recipient = anchor.web3.Keypair.generate();
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       recipient.publicKey,
       1_000_000_000,
     );
-    await provider.connection.confirmTransaction(sig);
 
     const destAta = getAssociatedTokenAddressSync(
       mintPda,
@@ -622,7 +622,7 @@ describe("entros-anchor", () => {
   it("moves a legacy identity into the configured projection without changing reputation", async () => {
     const fixture = loadProofFixture();
     migrationUser = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, migrationUser.publicKey, 5_000_000_000);
+    await fundAccount(provider, migrationUser.publicKey, 5_000_000_000);
     const boot = await bootstrapVerifiedUser({
       user: migrationUser,
       entrosAnchor: program,
@@ -652,7 +652,7 @@ describe("entros-anchor", () => {
       .rpc();
 
     const staleUser = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, staleUser.publicKey, 4_000_000_000);
+    await fundAccount(provider, staleUser.publicKey, 4_000_000_000);
     const staleBoot = await bootstrapVerifiedUser({
       user: staleUser,
       entrosAnchor: program,
@@ -805,7 +805,7 @@ describe("entros-anchor", () => {
 
   it("derives the current projection when minting", async () => {
     const user = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, user.publicKey, 3_000_000_000);
+    await fundAccount(provider, user.publicKey, 3_000_000_000);
     const [identityPda] = deriveIdentityPda(user.publicKey, entrosAnchorProgId);
     const [mintPda] = deriveMintPda(user.publicKey, entrosAnchorProgId);
     const ata = getAssociatedTokenAddressSync(
@@ -868,7 +868,7 @@ describe("entros-anchor", () => {
   it("rejects a replayed VerificationResult whose commitment_prev is stale", async () => {
     const fixture = loadProofFixture();
     const user = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, user.publicKey, 5_000_000_000);
+    await fundAccount(provider, user.publicKey, 5_000_000_000);
     const boot = await bootstrapVerifiedUser({
       user,
       entrosAnchor: program,
@@ -948,7 +948,7 @@ describe("entros-anchor", () => {
       migrationIdentityPda,
     );
     const newWallet = anchor.web3.Keypair.generate();
-    await airdrop(provider.connection, newWallet.publicKey, 5_000_000_000);
+    await fundAccount(provider, newWallet.publicKey, 5_000_000_000);
 
     const oldTokenAccount = getAssociatedTokenAddressSync(
       migrationMintPda,
