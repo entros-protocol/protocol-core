@@ -11,7 +11,6 @@ import {
 } from "@solana/spl-token";
 import {
   Ed25519Program,
-  Keypair,
   type PublicKey,
   Transaction,
   TransactionInstruction,
@@ -33,6 +32,7 @@ import {
 } from "./encodeDecode.ts";
 import {
   adminKp,
+  deterministicKeypair,
   initializeProtocol,
   pdasBySignerKp,
   sendTxns,
@@ -47,10 +47,7 @@ import {
 const fixedNowSecs = BigInt(1_700_000_000);
 setTime(fixedNowSecs);
 
-// Validator that will sign the receipt. The keypair is generated locally so
-// we hold the secretKey and can produce a valid Ed25519 signature; the
-// pubkey is registered on ProtocolConfig via setValidatorPubkey below.
-const validatorKp = Keypair.generate();
+const validatorKp = deterministicKeypair(8);
 
 const tokenProgram = TOKEN_2022_PROGRAM_ID;
 

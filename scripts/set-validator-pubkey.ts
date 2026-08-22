@@ -13,7 +13,7 @@
  * service uses to sign mint receipts.
  */
 
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { PublicKey, Connection, Keypair } from "@solana/web3.js";
 import fs from "fs";
 import path from "path";

@@ -17,7 +17,6 @@ import {
 } from "@solana/spl-token";
 import {
   Ed25519Program,
-  Keypair,
   type PublicKey,
   TransactionInstruction,
 } from "@solana/web3.js";
@@ -40,6 +39,7 @@ import {
 } from "./encodeDecode.ts";
 import {
   adminKp,
+  deterministicKeypair,
   hackerKp,
   initializeProtocol,
   pdasBySignerKp,
@@ -56,8 +56,7 @@ import {
 const fixedNowSecs = BigInt(1_700_000_000);
 setTime(fixedNowSecs);
 
-// Validator keypair signs the mint receipt (master-list #146 Phase 3).
-const validatorKp = Keypair.generate();
+const validatorKp = deterministicKeypair(7);
 
 const tokenProgram = TOKEN_2022_PROGRAM_ID;
 

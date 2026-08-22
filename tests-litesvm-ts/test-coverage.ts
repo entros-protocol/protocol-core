@@ -3,7 +3,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { type Keypair, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
 import {
   anchorAddr,
@@ -37,6 +37,7 @@ import {
   closeChallenge,
   closeVerificationResult,
   createChallenge,
+  deterministicKeypair,
   expireBlockhash,
   hackerKp,
   initializeProtocol,
@@ -434,26 +435,20 @@ test("registry.setValidatorPubkey() should fail by non-admin", async () => {
   );
   expectedErr =
     "Error Code: Unauthorized. Error Number: 6003. Error Message: Unauthorized: caller is not the expected authority.";
-  // Use a fresh non-admin keypair. The admin constraint must reject it.
-  const fakeValidator = Keypair.generate().publicKey;
+  const fakeValidator = deterministicKeypair(9).publicKey;
   setValidatorPubkey(user1Kp, fakeValidator, protocolConfigPda, expectedErr);
 });
 
 test("registry.setValidatorPubkey()", async () => {
   console.log("\n----------------== registry.setValidatorPubkey()");
-  // First call: writes the validator pubkey (no realloc needed since
-  // ProtocolConfig was initialized at the current 113-byte length earlier
-  // in this test sequence. The realloc path is exercised in the live
-  // devnet migration when an existing 77-byte account is upgraded).
-  const validator = Keypair.generate().publicKey;
+  const validator = deterministicKeypair(10).publicKey;
   setValidatorPubkey(adminKp, validator, protocolConfigPda);
 
   rawAccData = readAcct(protocolConfigPda, registryAddr);
   const config = decodeProtocolConfigDev(rawAccData);
   acctEqual(config.validator_pubkey, validator);
 
-  // Rotation: set a different pubkey, confirm it overwrites.
-  const validator2 = Keypair.generate().publicKey;
+  const validator2 = deterministicKeypair(11).publicKey;
   setValidatorPubkey(adminKp, validator2, protocolConfigPda);
   rawAccData = readAcct(protocolConfigPda, registryAddr);
   const configRotated = decodeProtocolConfigDev(rawAccData);

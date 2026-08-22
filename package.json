@@ -8,7 +8,7 @@
     "npm": "11.12.1"
   },
   "scripts": {
-    "test": "anchor test",
+    "test": "anchor test --validator legacy",
     "typecheck": "tsc --noEmit",
     "test:localnet": "bash ./scripts/test-localnet.sh",
     "test:litesvm": "bash ./scripts/test-litesvm.sh",
@@ -29,7 +29,7 @@
     }
   },
   "devDependencies": {
-    "@coral-xyz/anchor": "^0.32.1",
+    "@anchor-lang/core": "1.1.2",
     "@solana/buffer-layout": "^4.0.1",
     "@solana/buffer-layout-utils": "^0.3.0",
     "@solana/kit": "^6.8.0",

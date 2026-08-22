@@ -3,13 +3,13 @@
   "npm": "11.12.1",
   "rust": "1.91.0",
   "solana": {
-    "version": "2.2.1",
-    "url": "https://github.com/anza-xyz/agave/releases/download/v2.2.1/solana-release-x86_64-unknown-linux-gnu.tar.bz2",
-    "sha256": "7cbe6c5f2f6ed1db42bc1c1953ff7f161622add58bd74bedd7632dab44f49bb8"
+    "version": "3.1.10",
+    "url": "https://github.com/anza-xyz/agave/releases/download/v3.1.10/solana-release-x86_64-unknown-linux-gnu.tar.bz2",
+    "sha256": "a7205ff29bcf0f7199740225ecae2b85a28ea9668892d5ec21bd9749882984a1"
   },
   "anchor": {
-    "version": "0.32.1",
-    "url": "https://github.com/otter-sec/anchor/releases/download/v0.32.1/anchor-0.32.1-x86_64-unknown-linux-gnu",
-    "sha256": "5f25b850ce80278507a98947833fcd48423391f6d145046ffb0c5fd130dec436"
+    "version": "1.1.2",
+    "url": "https://github.com/otter-sec/anchor/releases/download/v1.1.2/anchor-1.1.2-x86_64-unknown-linux-gnu",
+    "sha256": "fdea9979629e9416e5f5e5622ff6c11b8c691d1e559581ece368e903c0c980c1"
   }
 }

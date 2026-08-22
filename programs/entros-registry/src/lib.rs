@@ -178,7 +178,7 @@ pub mod entros_registry {
             if required > current {
                 system_program::transfer(
                     CpiContext::new(
-                        ctx.accounts.system_program.to_account_info(),
+                        ctx.accounts.system_program.key(),
                         system_program::Transfer {
                             from: ctx.accounts.admin.to_account_info(),
                             to: config_info.to_account_info(),
@@ -246,7 +246,7 @@ pub mod entros_registry {
             if required > current {
                 system_program::transfer(
                     CpiContext::new(
-                        ctx.accounts.system_program.to_account_info(),
+                        ctx.accounts.system_program.key(),
                         system_program::Transfer {
                             from: ctx.accounts.admin.to_account_info(),
                             to: config_info.to_account_info(),
@@ -290,7 +290,7 @@ pub mod entros_registry {
         let treasury_bump = ctx.bumps.treasury;
         system_program::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.treasury.to_account_info(),
                     to: ctx.accounts.admin.to_account_info(),
@@ -357,7 +357,7 @@ pub mod entros_registry {
         if required > current {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.new_admin.to_account_info(),
                         to: config_info.to_account_info(),
@@ -386,7 +386,7 @@ pub mod entros_registry {
         // Transfer stake from validator to vault
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.validator.to_account_info(),
                     to: ctx.accounts.vault.to_account_info(),
@@ -498,7 +498,7 @@ pub mod entros_registry {
         let vault_bump = ctx.bumps.vault;
         system_program::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.vault.to_account_info(),
                     to: ctx.accounts.validator.to_account_info(),
