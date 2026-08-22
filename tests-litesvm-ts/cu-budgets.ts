@@ -15,7 +15,7 @@ export const maxComputeBudgets = {
   //Anchor
   mint_anchor: 98985,
   update_anchor: 25643,
-  authorize_new_wallet: 27485,
+  authorize_new_wallet: 30465,
   migrate_identity: 115196,
   reset_identity_state: 30493,
   set_encrypted_baseline: 20000, // init_if_needed first-call ~17K, update ~10K

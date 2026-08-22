@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { expect } from "chai";
 import type { EntrosRegistry } from "../target/types/entros_registry";
-import { TEST_VALIDATOR } from "./utils";
+import { fundAccount, TEST_VALIDATOR } from "./utils";
 
 describe("entros-registry", () => {
   const provider = anchor.AnchorProvider.env();
@@ -90,12 +90,11 @@ describe("entros-registry", () => {
   it("registers a validator with sufficient stake", async () => {
     const validator = anchor.web3.Keypair.generate();
 
-    // Airdrop SOL to the validator
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       validator.publicKey,
       5_000_000_000
     );
-    await provider.connection.confirmTransaction(sig);
 
     const [validatorStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("validator"), validator.publicKey.toBuffer()],
@@ -124,11 +123,11 @@ describe("entros-registry", () => {
   it("fails to register with insufficient stake", async () => {
     const validator = anchor.web3.Keypair.generate();
 
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       validator.publicKey,
       5_000_000_000
     );
-    await provider.connection.confirmTransaction(sig);
 
     const [validatorStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("validator"), validator.publicKey.toBuffer()],
@@ -179,11 +178,11 @@ describe("entros-registry", () => {
 
   it("unstakes validator and returns SOL", async () => {
     const validator = anchor.web3.Keypair.generate();
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       validator.publicKey,
       5_000_000_000
     );
-    await provider.connection.confirmTransaction(sig);
 
     const [validatorStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("validator"), validator.publicKey.toBuffer()],
@@ -231,16 +230,16 @@ describe("entros-registry", () => {
     const validator = anchor.web3.Keypair.generate();
     const attacker = anchor.web3.Keypair.generate();
 
-    const sig1 = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       validator.publicKey,
       5_000_000_000
     );
-    await provider.connection.confirmTransaction(sig1);
-    const sig2 = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       attacker.publicKey,
       2_000_000_000
     );
-    await provider.connection.confirmTransaction(sig2);
 
     const [validatorStatePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("validator"), validator.publicKey.toBuffer()],
@@ -332,11 +331,11 @@ describe("entros-registry", () => {
 
   it("rejects update_protocol_config from non-admin", async () => {
     const attacker = anchor.web3.Keypair.generate();
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       attacker.publicKey,
       2_000_000_000
     );
-    await provider.connection.confirmTransaction(sig);
 
     try {
       await program.methods
@@ -419,12 +418,7 @@ describe("entros-registry", () => {
 
   it("rejects projection version changes from a non-admin", async () => {
     const attacker = anchor.web3.Keypair.generate();
-    await provider.connection.confirmTransaction(
-      await provider.connection.requestAirdrop(
-        attacker.publicKey,
-        2_000_000_000,
-      ),
-    );
+    await fundAccount(provider, attacker.publicKey, 2_000_000_000);
 
     try {
       await program.methods
@@ -478,11 +472,11 @@ describe("entros-registry", () => {
 
   it("rejects treasury withdrawal from non-admin", async () => {
     const attacker = anchor.web3.Keypair.generate();
-    const sig = await provider.connection.requestAirdrop(
+    await fundAccount(
+      provider,
       attacker.publicKey,
       2_000_000_000
     );
-    await provider.connection.confirmTransaction(sig);
 
     try {
       await program.methods

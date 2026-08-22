@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Verify JavaScript toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v$(jq -r '.node' ci-toolchain.json)"
+          test "$(npm --version)" = "$(jq -r '.npm' ci-toolchain.json)"
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libssl-dev \
+            libudev-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust_version="$(jq -r '.rust' ci-toolchain.json)"
+          rustup toolchain install "$rust_version" \
+            --profile minimal \
+            --component clippy,rustfmt
+          test "$(rustc "+$rust_version" --version | awk '{print $2}')" = "$rust_version"
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-registry-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Verify Rust source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
+
+      - name: Install Solana and Anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          solana_url="$(jq -r '.solana.url' ci-toolchain.json)"
+          solana_sha="$(jq -r '.solana.sha256' ci-toolchain.json)"
+          solana_archive="$RUNNER_TEMP/solana-release.tar.bz2"
+          solana_directory="$RUNNER_TEMP/solana"
+          anchor_url="$(jq -r '.anchor.url' ci-toolchain.json)"
+          anchor_sha="$(jq -r '.anchor.sha256' ci-toolchain.json)"
+          anchor_directory="$RUNNER_TEMP/anchor"
+
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$solana_archive" "$solana_url"
+          echo "$solana_sha  $solana_archive" | sha256sum --check --strict
+          mkdir -p "$solana_directory"
+          tar --extract --bzip2 --file "$solana_archive" --directory "$solana_directory"
+
+          mkdir -p "$anchor_directory"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$anchor_directory/anchor" "$anchor_url"
+          echo "$anchor_sha  $anchor_directory/anchor" | sha256sum --check --strict
+          chmod 0755 "$anchor_directory/anchor"
+
+          echo "$solana_directory/solana-release/bin" >> "$GITHUB_PATH"
+          echo "$anchor_directory" >> "$GITHUB_PATH"
+
+      - name: Verify Solana toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          solana --version | grep --fixed-strings "solana-cli $(jq -r '.solana.version' ci-toolchain.json)"
+          test "$(anchor --version)" = "anchor-cli $(jq -r '.anchor.version' ci-toolchain.json)"
+
+      - name: Build the programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          anchor build --no-idl -- -- --locked
+          anchor build
+          git diff --exit-code -- Cargo.lock
+
+      - name: Verify TypeScript
+        run: npm run typecheck
+
+      - name: Test the programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:localnet
+          npm run test:litesvm
+
+      - name: Verify repository cleanliness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain -- tests/fixtures)"
