@@ -18,6 +18,57 @@ describe("entros-verifier", () => {
   const program = anchor.workspace.entrosVerifier as Program<EntrosVerifier>;
   const entrosVerifierProgId = program.programId;
 
+  async function expectCompactInputRejection(
+    threshold: number,
+    minDistance: number,
+  ): Promise<void> {
+    const nonce = generateNonce();
+    const [challengePda] = deriveChallengePda(
+      provider.wallet.publicKey,
+      nonce,
+      entrosVerifierProgId,
+    );
+    const [verificationPda] = deriveVerificationPda(
+      provider.wallet.publicKey,
+      nonce,
+      entrosVerifierProgId,
+    );
+
+    await program.methods
+      .createChallenge(nonce)
+      .accountsStrict({
+        challenger: provider.wallet.publicKey,
+        challenge: challengePda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    try {
+      await program.methods
+        .verifyProofCompact(
+          nonce,
+          fixture.proof_bytes,
+          fixture.public_inputs[0],
+          fixture.public_inputs[1],
+          threshold,
+          minDistance,
+        )
+        .accountsStrict({
+          verifier: provider.wallet.publicKey,
+          challenge: challengePda,
+          verificationResult: verificationPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+      expect.fail("invalid compact public inputs must be rejected");
+    } catch (error: unknown) {
+      expect(String(error)).to.match(/InvalidPublicInputs|6004/);
+    }
+
+    const challenge = await program.account.challenge.fetch(challengePda);
+    expect(challenge.used).to.be.false;
+  }
+
   it("creates a challenge", async () => {
     const nonce = generateNonce();
     const [challengePda] = deriveChallengePda(
@@ -90,6 +141,146 @@ describe("entros-verifier", () => {
     const challenge = await program.account.challenge.fetch(challengePda);
     expect(challenge.used).to.be.true;
   });
+
+  it("verifies the same proof through fixed-size arguments", async () => {
+    const nonce = generateNonce();
+    const [challengePda] = deriveChallengePda(
+      provider.wallet.publicKey,
+      nonce,
+      entrosVerifierProgId,
+    );
+    const [verificationPda] = deriveVerificationPda(
+      provider.wallet.publicKey,
+      nonce,
+      entrosVerifierProgId,
+    );
+
+    await program.methods
+      .createChallenge(nonce)
+      .accountsStrict({
+        challenger: provider.wallet.publicKey,
+        challenge: challengePda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    await program.methods
+      .verifyProofCompact(
+        nonce,
+        fixture.proof_bytes,
+        fixture.public_inputs[0],
+        fixture.public_inputs[1],
+        30,
+        3,
+      )
+      .accountsStrict({
+        verifier: provider.wallet.publicKey,
+        challenge: challengePda,
+        verificationResult: verificationPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const result =
+      await program.account.verificationResult.fetch(verificationPda);
+    expect(result.isValid).to.be.true;
+    expect(result.commitmentNew).to.deep.equal(fixture.public_inputs[0]);
+    expect(result.commitmentPrev).to.deep.equal(fixture.public_inputs[1]);
+    expect(result.threshold).to.equal(30);
+    expect(result.minDistance).to.equal(3);
+  });
+
+  it("stores equivalent legacy and compact proof results", async () => {
+    const legacyNonce = generateNonce();
+    const compactNonce = generateNonce();
+    const [legacyChallengePda] = deriveChallengePda(
+      provider.wallet.publicKey,
+      legacyNonce,
+      entrosVerifierProgId,
+    );
+    const [legacyResultPda] = deriveVerificationPda(
+      provider.wallet.publicKey,
+      legacyNonce,
+      entrosVerifierProgId,
+    );
+    const [compactChallengePda] = deriveChallengePda(
+      provider.wallet.publicKey,
+      compactNonce,
+      entrosVerifierProgId,
+    );
+    const [compactResultPda] = deriveVerificationPda(
+      provider.wallet.publicKey,
+      compactNonce,
+      entrosVerifierProgId,
+    );
+
+    await program.methods
+      .createChallenge(legacyNonce)
+      .accountsStrict({
+        challenger: provider.wallet.publicKey,
+        challenge: legacyChallengePda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+    await program.methods
+      .verifyProof(
+        Buffer.from(fixture.proof_bytes),
+        fixture.public_inputs,
+        legacyNonce,
+      )
+      .accountsStrict({
+        verifier: provider.wallet.publicKey,
+        challenge: legacyChallengePda,
+        verificationResult: legacyResultPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    await program.methods
+      .createChallenge(compactNonce)
+      .accountsStrict({
+        challenger: provider.wallet.publicKey,
+        challenge: compactChallengePda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+    await program.methods
+      .verifyProofCompact(
+        compactNonce,
+        fixture.proof_bytes,
+        fixture.public_inputs[0],
+        fixture.public_inputs[1],
+        30,
+        3,
+      )
+      .accountsStrict({
+        verifier: provider.wallet.publicKey,
+        challenge: compactChallengePda,
+        verificationResult: compactResultPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    const legacy = await program.account.verificationResult.fetch(legacyResultPda);
+    const compact = await program.account.verificationResult.fetch(compactResultPda);
+    expect(compact.verifier.toBase58()).to.equal(legacy.verifier.toBase58());
+    expect(compact.proofHash).to.deep.equal(legacy.proofHash);
+    expect(compact.isValid).to.equal(legacy.isValid);
+    expect(compact.commitmentNew).to.deep.equal(legacy.commitmentNew);
+    expect(compact.commitmentPrev).to.deep.equal(legacy.commitmentPrev);
+    expect(compact.threshold).to.equal(legacy.threshold);
+    expect(compact.minDistance).to.equal(legacy.minDistance);
+  });
+
+  for (const { name, threshold, minDistance } of [
+    { name: "an out-of-range compact threshold", threshold: 97, minDistance: 3 },
+    { name: "a compact distance below the floor", threshold: 30, minDistance: 2 },
+    { name: "an empty compact distance interval", threshold: 3, minDistance: 3 },
+  ]) {
+    it(`rejects ${name}`, async () => {
+      await expectCompactInputRejection(threshold, minDistance);
+    });
+  }
 
   it("rejects tampered proof (transaction reverts)", async () => {
     const nonce = generateNonce();
@@ -188,7 +379,7 @@ describe("entros-verifier", () => {
     }
   });
 
-  // ---- Binding-patch bound-check tests (added 2026-04-20) ----
+  // Public input bound checks.
 
   it("stores commitment_new / commitment_prev / threshold / min_distance on a valid proof", async () => {
     const nonce = generateNonce();

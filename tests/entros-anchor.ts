@@ -287,6 +287,114 @@ describe("entros-anchor", () => {
     trustScore1vrf = identity.trustScore;
   });
 
+  it("updates identity state through the compact instruction", async () => {
+    const fixture = loadProofFixture();
+    const user = anchor.web3.Keypair.generate();
+    await fundAccount(provider, user.publicKey, 3_000_000_000);
+
+    const boot = await bootstrapVerifiedUser({
+      user,
+      entrosAnchor: program,
+      entrosVerifier,
+      fixture,
+      protocolConfigPda,
+      treasuryPda,
+      mintAuthorityPda,
+    });
+
+    await program.methods
+      .updateAnchorCompact(boot.nonce)
+      .accountsStrict({
+        authority: user.publicKey,
+        identityState: boot.identityPda,
+        verificationResult: boot.verificationPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    const identity = await program.account.identityState.fetch(
+      boot.identityPda,
+    );
+    expect(identity.verificationCount).to.equal(1);
+    expect(identity.trustScore).to.be.greaterThanOrEqual(100);
+    expect(Buffer.from(identity.currentCommitment)).to.deep.equal(
+      Buffer.from(fixture.public_inputs[0]),
+    );
+  });
+
+  it("applies equivalent legacy and compact identity updates", async () => {
+    const fixture = loadProofFixture();
+    const legacyUser = anchor.web3.Keypair.generate();
+    const compactUser = anchor.web3.Keypair.generate();
+    await fundAccount(provider, legacyUser.publicKey, 3_000_000_000);
+    await fundAccount(provider, compactUser.publicKey, 3_000_000_000);
+
+    const legacyBoot = await bootstrapVerifiedUser({
+      user: legacyUser,
+      entrosAnchor: program,
+      entrosVerifier,
+      fixture,
+      protocolConfigPda,
+      treasuryPda,
+      mintAuthorityPda,
+    });
+    const compactBoot = await bootstrapVerifiedUser({
+      user: compactUser,
+      entrosAnchor: program,
+      entrosVerifier,
+      fixture,
+      protocolConfigPda,
+      treasuryPda,
+      mintAuthorityPda,
+    });
+
+    const beforeLegacy = await provider.connection.getBalance(treasuryPda);
+    await program.methods
+      .updateAnchor(fixture.public_inputs[0], legacyBoot.nonce)
+      .accountsStrict({
+        authority: legacyUser.publicKey,
+        identityState: legacyBoot.identityPda,
+        verificationResult: legacyBoot.verificationPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([legacyUser])
+      .rpc();
+    const afterLegacy = await provider.connection.getBalance(treasuryPda);
+
+    await program.methods
+      .updateAnchorCompact(compactBoot.nonce)
+      .accountsStrict({
+        authority: compactUser.publicKey,
+        identityState: compactBoot.identityPda,
+        verificationResult: compactBoot.verificationPda,
+        protocolConfig: protocolConfigPda,
+        treasury: treasuryPda,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([compactUser])
+      .rpc();
+    const afterCompact = await provider.connection.getBalance(treasuryPda);
+
+    const legacy = await program.account.identityState.fetch(
+      legacyBoot.identityPda,
+    );
+    const compact = await program.account.identityState.fetch(
+      compactBoot.identityPda,
+    );
+    expect(compact.currentCommitment).to.deep.equal(legacy.currentCommitment);
+    expect(compact.verificationCount).to.equal(legacy.verificationCount);
+    expect(compact.trustScore).to.equal(legacy.trustScore);
+    expect(compact.projectionVersion).to.equal(legacy.projectionVersion);
+    expect(compact.recentTimestamps.filter((value) => value.toNumber() > 0)).to.have
+      .length(legacy.recentTimestamps.filter((value) => value.toNumber() > 0).length);
+    expect(afterCompact - afterLegacy).to.equal(afterLegacy - beforeLegacy);
+  });
+
   it("rejects update from unauthorized wallet (ownership check)", async () => {
     // Victim sets up a legit identity + VR
     const fixture = loadProofFixture();

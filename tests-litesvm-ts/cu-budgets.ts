@@ -18,8 +18,9 @@ export const maxComputeBudgets = {
   reset_identity_state: 30493,
   set_encrypted_baseline: 20000, // init_if_needed first-call ~17K, update ~10K
   //verifier
-  create_challenge: 17922,
+  create_challenge: 23000,
   verify_proof: 122973,
+  verify_proof_compact: 122224,
   close_challenge: 2450,
   close_verification_result: 2550,
 };

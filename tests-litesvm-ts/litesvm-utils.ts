@@ -860,7 +860,7 @@ export const createChallenge = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(
+  return sendTxns(
     blockhash,
     [ix],
     [challenger],
@@ -957,12 +957,57 @@ export const verifyProof = (
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
-  sendTxns(
+  return sendTxns(
     blockhash,
     [ix],
     [signer],
     progAddr,
     maxComputeBudgets.verify_proof,
+    expectedErr,
+  );
+};
+
+export const verifyProofCompact = (
+  signer: Keypair,
+  proofBytes: Buffer<ArrayBuffer>,
+  publicInputs: number[][],
+  nonce: number[],
+  challengePda: PublicKey,
+  verificationPda: PublicKey,
+  expectedErr = "",
+) => {
+  if (publicInputs.length !== 4) {
+    throw new Error("compact proof requires four public inputs");
+  }
+  const threshold = Buffer.from(publicInputs[2]).readUInt16BE(30);
+  const minDistance = Buffer.from(publicInputs[3]).readUInt16BE(30);
+  const bounds = Buffer.alloc(4);
+  bounds.writeUInt16LE(threshold, 0);
+  bounds.writeUInt16LE(minDistance, 2);
+  const disc = [78, 42, 251, 67, 237, 19, 187, 192];
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: challengePda, isSigner: false, isWritable: true },
+      { pubkey: verificationPda, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    programId: verifierAddr,
+    data: Buffer.concat([
+      Buffer.from(disc),
+      Buffer.from(nonce),
+      proofBytes,
+      Buffer.from(publicInputs[0]),
+      Buffer.from(publicInputs[1]),
+      bounds,
+    ]),
+  });
+  return sendTxns(
+    svm.latestBlockhash(),
+    [instruction],
+    [signer],
+    verifierAddr,
+    maxComputeBudgets.verify_proof_compact,
     expectedErr,
   );
 };
@@ -1034,7 +1079,7 @@ export const sendTxns = (
   tx.sign(...signerKps); //first signature is considered "primary" and is used identify and confirm transactions.
   const simRes = svm.simulateTransaction(tx);
   const sendRes = svm.sendTransaction(tx);
-  checkLogs(simRes, sendRes, programId, maxComputeBudget, expectedError);
+  return checkLogs(simRes, sendRes, programId, maxComputeBudget, expectedError);
 };
 //-------------== Send SOL
 export const sendSol = (
@@ -1068,7 +1113,7 @@ export const checkLogs = (
   maxComputeBudget: number,
   expectedError = "",
   isVerbose = false,
-) => {
+): bigint | null => {
   console.log("\nsimRes meta prettylogs:", simRes.meta().prettyLogs());
   /** simRes.meta():
       computeUnitsConsumed: [class computeUnitsConsumed],
@@ -1105,6 +1150,7 @@ export const checkLogs = (
       computeUnitsHeadroom,
     );
     expect(Number(computeUnitsConsumed)).to.be.at.most(maxComputeBudget);
+    return computeUnitsConsumed;
   } else {
     console.log("txn failed");
     console.log("sendRes.err():", sendRes.err());
@@ -1143,5 +1189,6 @@ export const checkLogs = (
         `Unexpected error: ${err_mesg}  errCode: ${errCode}, ${Number(errCode)}`,
       );
     }
+    return null;
   }
 };
