@@ -445,6 +445,206 @@ const MINT_NAME: &str = "Entros Anchor";
 const MINT_SYMBOL: &str = "ANCHOR";
 const MINT_URI: &str = "https://entros.io/anchor-metadata.json";
 
+struct AnchorUpdateAccounts<'a, 'info> {
+    authority: &'a Signer<'info>,
+    identity_state: &'a UncheckedAccount<'info>,
+    verification_result: &'a UncheckedAccount<'info>,
+    protocol_config: &'a UncheckedAccount<'info>,
+    treasury: &'a UncheckedAccount<'info>,
+    system_program: &'a Program<'info, System>,
+}
+
+fn process_anchor_update(
+    accounts: AnchorUpdateAccounts<'_, '_>,
+    expected_new_commitment: Option<[u8; 32]>,
+) -> Result<()> {
+    let identity_info = accounts.identity_state;
+    require!(
+        identity_info.owner == &crate::ID,
+        EntrosAnchorError::InvalidIdentityState
+    );
+    let now = Clock::get()?.unix_timestamp;
+    let new_len = IdentityState::LEN;
+
+    let current_len = identity_info.data_len();
+    if current_len < new_len {
+        identity_info.resize(new_len)?;
+        let required = Rent::get()?.minimum_balance(new_len);
+        let current_lamports = identity_info.lamports();
+        if required > current_lamports {
+            system_program::transfer(
+                CpiContext::new(
+                    accounts.system_program.key(),
+                    system_program::Transfer {
+                        from: accounts.authority.to_account_info(),
+                        to: identity_info.to_account_info(),
+                    },
+                ),
+                required - current_lamports,
+            )?;
+        }
+    }
+
+    let mut identity = {
+        let data = identity_info.try_borrow_data()?;
+        IdentityState::try_deserialize(&mut &data[..])
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?
+    };
+    require!(
+        identity.owner == accounts.authority.key(),
+        EntrosAnchorError::Unauthorized
+    );
+
+    require!(
+        accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
+        EntrosAnchorError::InvalidProtocolConfig
+    );
+    let config_data = accounts.protocol_config.try_borrow_data()?;
+    require!(
+        config_data.len() >= 69,
+        EntrosAnchorError::InvalidProtocolConfig
+    );
+    let projection_policy = read_projection_policy(&config_data)?;
+    validate_identity_projection(identity.projection_version, projection_policy)?;
+    let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
+    let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
+    let verification_fee = u64::from_le_bytes([
+        config_data[61],
+        config_data[62],
+        config_data[63],
+        config_data[64],
+        config_data[65],
+        config_data[66],
+        config_data[67],
+        config_data[68],
+    ]);
+    drop(config_data);
+
+    let verification_info = accounts.verification_result.to_account_info();
+    require!(
+        verification_info.owner == &VERIFIER_PROGRAM_ID,
+        EntrosAnchorError::VerificationResultWrongOwner
+    );
+    let verification_data = verification_info.try_borrow_data()?;
+    require!(
+        verification_data.len() >= VERIFICATION_RESULT_LEN_V2,
+        EntrosAnchorError::StaleVerificationResult
+    );
+    require!(
+        verification_data[0..8] == VERIFICATION_RESULT_DISCRIMINATOR,
+        EntrosAnchorError::StaleVerificationResult
+    );
+
+    let verifier_bytes: [u8; 32] = verification_data[VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
+        .try_into()
+        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+    require!(
+        Pubkey::new_from_array(verifier_bytes) == accounts.authority.key(),
+        EntrosAnchorError::VerifierMismatch
+    );
+
+    let verified_at_bytes: [u8; 8] = verification_data
+        [VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
+        .try_into()
+        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+    let verified_at = i64::from_le_bytes(verified_at_bytes);
+    require!(verified_at <= now, EntrosAnchorError::ProofFromFuture);
+    require!(
+        now.saturating_sub(verified_at) <= MAX_PROOF_AGE_SECS,
+        EntrosAnchorError::ProofExpired
+    );
+
+    let commitment_new: [u8; 32] = verification_data
+        [VR_OFFSET_COMMITMENT_NEW..VR_OFFSET_COMMITMENT_NEW + 32]
+        .try_into()
+        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+    let commitment_prev: [u8; 32] = verification_data
+        [VR_OFFSET_COMMITMENT_PREV..VR_OFFSET_COMMITMENT_PREV + 32]
+        .try_into()
+        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+    drop(verification_data);
+
+    require!(
+        commitment_new != [0u8; 32],
+        EntrosAnchorError::InvalidCommitment
+    );
+    if let Some(expected) = expected_new_commitment {
+        require!(
+            commitment_new == expected,
+            EntrosAnchorError::CommitmentMismatch
+        );
+    }
+    require!(
+        commitment_prev == identity.current_commitment,
+        EntrosAnchorError::PrevCommitmentMismatch
+    );
+
+    identity.current_commitment = commitment_new;
+    identity.verification_count = identity
+        .verification_count
+        .checked_add(1)
+        .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
+    identity.last_verification_timestamp = now;
+    record_verification(&mut identity.recent_timestamps, now);
+
+    let mut active_bins = [false; NUM_BINS];
+    for &timestamp in &identity.recent_timestamps {
+        if timestamp == 0 {
+            continue;
+        }
+        let bin_index = (now.saturating_sub(timestamp) / BIN_SIZE_SECS) as usize;
+        if bin_index < NUM_BINS {
+            active_bins[bin_index] = true;
+        }
+    }
+
+    let mut base_score = 0u64;
+    for (index, active) in active_bins.iter().copied().enumerate() {
+        if active {
+            let weight = u64::from(base_trust_increment).saturating_mul((NUM_BINS - index) as u64)
+                / NUM_BINS as u64;
+            base_score = base_score.saturating_add(weight);
+        }
+    }
+
+    let age_seconds = now
+        .checked_sub(identity.creation_timestamp)
+        .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
+    let age_days = (age_seconds / 86_400).max(0) as u64;
+    let age_bonus = isqrt(age_days.min(365)) * 4;
+    identity.trust_score = base_score
+        .saturating_add(age_bonus)
+        .min(u64::from(max_trust_score)) as u16;
+
+    let mut data = identity_info.try_borrow_mut_data()?;
+    identity
+        .try_serialize(&mut *data)
+        .map_err(|_| error!(EntrosAnchorError::IdentitySerializationFailed))?;
+    drop(data);
+
+    if verification_fee > 0 {
+        system_program::transfer(
+            CpiContext::new(
+                accounts.system_program.key(),
+                system_program::Transfer {
+                    from: accounts.authority.to_account_info(),
+                    to: accounts.treasury.to_account_info(),
+                },
+            ),
+            verification_fee,
+        )?;
+    }
+
+    emit!(AnchorUpdated {
+        owner: identity.owner,
+        verification_count: identity.verification_count,
+        trust_score: identity.trust_score,
+        commitment: commitment_new,
+    });
+
+    Ok(())
+}
+
 #[program]
 pub mod entros_anchor {
     use super::*;
@@ -955,237 +1155,36 @@ pub mod entros_anchor {
             new_commitment != [0u8; 32],
             EntrosAnchorError::InvalidCommitment
         );
+        process_anchor_update(
+            AnchorUpdateAccounts {
+                authority: &ctx.accounts.authority,
+                identity_state: &ctx.accounts.identity_state,
+                verification_result: &ctx.accounts.verification_result,
+                protocol_config: &ctx.accounts.protocol_config,
+                treasury: &ctx.accounts.treasury,
+                system_program: &ctx.accounts.system_program,
+            },
+            Some(new_commitment),
+        )
+    }
 
-        let identity_info = &ctx.accounts.identity_state;
-        // Defense-in-depth: the seeds constraint already forces the address,
-        // but an explicit owner check prevents any future refactor from
-        // accidentally accepting a program-external account at this PDA.
-        require!(
-            identity_info.owner == &crate::ID,
-            EntrosAnchorError::InvalidIdentityState
-        );
-        let now = Clock::get()?.unix_timestamp;
-        let new_len = IdentityState::LEN;
-
-        // Migrate: resize old accounts (207 bytes / 10 slots) to new size (543 bytes / 52 slots)
-        let current_len = identity_info.data_len();
-        if current_len < new_len {
-            identity_info.resize(new_len)?;
-            // Pay additional rent for the extra space
-            let rent = Rent::get()?;
-            let required = rent.minimum_balance(new_len);
-            let current_lamports = identity_info.lamports();
-            if required > current_lamports {
-                system_program::transfer(
-                    CpiContext::new(
-                        ctx.accounts.system_program.key(),
-                        system_program::Transfer {
-                            from: ctx.accounts.authority.to_account_info(),
-                            to: identity_info.to_account_info(),
-                        },
-                    ),
-                    required - current_lamports,
-                )?;
-            }
-        }
-
-        // Deserialize identity state (now guaranteed to be the right size)
-        let mut identity = {
-            let data = identity_info.try_borrow_data()?;
-            IdentityState::try_deserialize(&mut &data[..])
-                .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?
-        };
-
-        // Verify ownership
-        require!(
-            identity.owner == ctx.accounts.authority.key(),
-            EntrosAnchorError::Unauthorized
-        );
-
-        require!(
-            ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
-            EntrosAnchorError::InvalidProtocolConfig
-        );
-        let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
-        require!(
-            config_data.len() >= 69,
-            EntrosAnchorError::InvalidProtocolConfig
-        );
-        let projection_policy = read_projection_policy(&config_data)?;
-        validate_identity_projection(identity.projection_version, projection_policy)?;
-        let max_trust_score = u16::from_le_bytes([config_data[56], config_data[57]]);
-        let base_trust_increment = u16::from_le_bytes([config_data[58], config_data[59]]);
-        let verification_fee = u64::from_le_bytes([
-            config_data[61],
-            config_data[62],
-            config_data[63],
-            config_data[64],
-            config_data[65],
-            config_data[66],
-            config_data[67],
-            config_data[68],
-        ]);
-        drop(config_data);
-
-        // Cross-program validation of the VerificationResult PDA.
-        //
-        // The account is passed as UncheckedAccount because Anchor's
-        // `Account<T>` deserialization requires owner-program equality with the
-        // crate that defined `T`; entros-verifier's state type isn't in scope for
-        // entros-anchor and adding a CPI dependency just to deserialize is
-        // heavier than raw-bytes validation. This matches the existing
-        // cross-program read pattern used for ProtocolConfig below.
-        //
-        // The `seeds = [b"verification", authority, verification_nonce]` +
-        // `seeds::program = VERIFIER_PROGRAM_ID` constraint on the account
-        // context guarantees the PDA address is correct. Here we additionally
-        // enforce: (a) owner program, (b) account is post-patch layout,
-        // (c) verifier matches signing authority, (d) proof is fresh,
-        // (e) commitment_new matches submitted new_commitment,
-        // (f) commitment_prev matches identity's current_commitment.
-        let vr_info = ctx.accounts.verification_result.to_account_info();
-        require!(
-            vr_info.owner == &VERIFIER_PROGRAM_ID,
-            EntrosAnchorError::VerificationResultWrongOwner
-        );
-        let vr_data = vr_info.try_borrow_data()?;
-        require!(
-            vr_data.len() >= VERIFICATION_RESULT_LEN_V2,
-            EntrosAnchorError::StaleVerificationResult
-        );
-        // Discriminator check: the first 8 bytes must match entros-verifier's
-        // Anchor-computed `sha256("account:VerificationResult")[0..8]`.
-        // Prevents a same-length but differently-typed account (e.g. some
-        // future Challenge v2 or an orphaned account) from masquerading.
-        require!(
-            vr_data[0..8] == VERIFICATION_RESULT_DISCRIMINATOR,
-            EntrosAnchorError::StaleVerificationResult
-        );
-        let verifier_pk_bytes: [u8; 32] = vr_data[VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
-            .try_into()
-            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
-        let verifier_pk = Pubkey::new_from_array(verifier_pk_bytes);
-        require!(
-            verifier_pk == ctx.accounts.authority.key(),
-            EntrosAnchorError::VerifierMismatch
-        );
-        let verified_at_bytes: [u8; 8] = vr_data[VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
-            .try_into()
-            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
-        let verified_at = i64::from_le_bytes(verified_at_bytes);
-        // Reject future-dated proofs before the age check: saturating_sub on
-        // i64 returns a negative value when verified_at > now, which trivially
-        // satisfies <= MAX_PROOF_AGE_SECS and would let it through.
-        require!(verified_at <= now, EntrosAnchorError::ProofFromFuture);
-        require!(
-            now.saturating_sub(verified_at) <= MAX_PROOF_AGE_SECS,
-            EntrosAnchorError::ProofExpired
-        );
-        let commitment_new_bound: [u8; 32] = vr_data
-            [VR_OFFSET_COMMITMENT_NEW..VR_OFFSET_COMMITMENT_NEW + 32]
-            .try_into()
-            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
-        let commitment_prev_bound: [u8; 32] = vr_data
-            [VR_OFFSET_COMMITMENT_PREV..VR_OFFSET_COMMITMENT_PREV + 32]
-            .try_into()
-            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
-        drop(vr_data);
-        require!(
-            commitment_new_bound == new_commitment,
-            EntrosAnchorError::CommitmentMismatch
-        );
-        require!(
-            commitment_prev_bound == identity.current_commitment,
-            EntrosAnchorError::PrevCommitmentMismatch
-        );
-
-        identity.current_commitment = new_commitment;
-        identity.verification_count = identity
-            .verification_count
-            .checked_add(1)
-            .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
-        identity.last_verification_timestamp = now;
-
-        record_verification(&mut identity.recent_timestamps, now);
-
-        // Weekly Bin Activation model (removes daily-farming incentives and rewards span over frequency)
-        // Divide the past 84 days (12 weeks) into 12 bins of 7 days each.
-        // A bin is active if there is at least one verification timestamp inside its range.
-        let mut active_bins = [false; NUM_BINS];
-        for &ts in identity.recent_timestamps.iter() {
-            if ts == 0 {
-                continue;
-            }
-            let elapsed = now.saturating_sub(ts);
-            let bin_idx = (elapsed / BIN_SIZE_SECS) as usize;
-            if bin_idx < NUM_BINS {
-                active_bins[bin_idx] = true;
-            }
-        }
-
-        // Recency-weighted span score, normalized to base_trust_increment.
-        // Weight(k) = base_trust_increment * (NUM_BINS - k) / NUM_BINS, so the
-        // most-recent active week contributes exactly base_trust_increment and a
-        // single fresh verification scores ~base (preserving the pre-weekly-bin
-        // scale), older weeks decay linearly, and sustained span across all
-        // NUM_BINS weeks tops out near base * 6.5. This keeps the anti-farming
-        // "span over frequency" model (A2) without the unintended ~NUM_BINS-x
-        // rescale the un-normalized (NUM_BINS - k) weight produced. See
-        let mut base_score: u64 = 0;
-        for (k, &active) in active_bins.iter().enumerate() {
-            if active {
-                let weight = u64::from(base_trust_increment).saturating_mul((NUM_BINS - k) as u64)
-                    / (NUM_BINS as u64);
-                base_score = base_score.saturating_add(weight);
-            }
-        }
-
-        // Deprecated regularity bonus (farming mitigation: regularity score is set to 0)
-        let regularity_bonus: u64 = 0;
-
-        // Age bonus with diminishing returns (reallocated weight from regularity bonus)
-        let age_seconds = now
-            .checked_sub(identity.creation_timestamp)
-            .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
-        // Saturate negative ages (clock-rollback edge case) to 0 days. The
-        // u64 cast is then lossless because age_days is always non-negative.
-        let age_days: u64 = (age_seconds / 86400).max(0) as u64;
-        let age_bonus = isqrt(age_days.min(365)) * 4;
-
-        let total = base_score
-            .saturating_add(regularity_bonus)
-            .saturating_add(age_bonus);
-        identity.trust_score = total.min(u64::from(max_trust_score)) as u16;
-
-        // Serialize identity state back to account
-        let mut data = identity_info.try_borrow_mut_data()?;
-        identity
-            .try_serialize(&mut *data)
-            .map_err(|_| error!(EntrosAnchorError::IdentitySerializationFailed))?;
-        drop(data);
-
-        // Transfer verification fee from user to protocol treasury
-        if verification_fee > 0 {
-            system_program::transfer(
-                CpiContext::new(
-                    ctx.accounts.system_program.key(),
-                    system_program::Transfer {
-                        from: ctx.accounts.authority.to_account_info(),
-                        to: ctx.accounts.treasury.to_account_info(),
-                    },
-                ),
-                verification_fee,
-            )?;
-        }
-
-        emit!(AnchorUpdated {
-            owner: identity.owner,
-            verification_count: identity.verification_count,
-            trust_score: identity.trust_score,
-            commitment: new_commitment,
-        });
-
-        Ok(())
+    /// Update the identity state using the commitment bound to the proof.
+    #[allow(unused_variables)] // nonce is consumed via the #[instruction] seeds constraint
+    pub fn update_anchor_compact(
+        ctx: Context<UpdateAnchorCompact>,
+        verification_nonce: [u8; 32],
+    ) -> Result<()> {
+        process_anchor_update(
+            AnchorUpdateAccounts {
+                authority: &ctx.accounts.authority,
+                identity_state: &ctx.accounts.identity_state,
+                verification_result: &ctx.accounts.verification_result,
+                protocol_config: &ctx.accounts.protocol_config,
+                treasury: &ctx.accounts.treasury,
+                system_program: &ctx.accounts.system_program,
+            },
+            None,
+        )
     }
 
     /// Reset the caller's identity state to a fresh baseline.
@@ -1751,6 +1750,48 @@ pub struct UpdateAnchor<'info> {
     pub protocol_config: UncheckedAccount<'info>,
 
     /// CHECK: Protocol treasury PDA on entros-registry. Receives verification fees.
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(verification_nonce: [u8; 32])]
+pub struct UpdateAnchorCompact<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: The PDA constraint binds this account to the signing authority.
+    #[account(
+        mut,
+        seeds = [b"identity", authority.key().as_ref()],
+        bump,
+    )]
+    pub identity_state: UncheckedAccount<'info>,
+
+    /// CHECK: The verifier program and nonce derive this read-only result PDA.
+    #[account(
+        seeds = [b"verification", authority.key().as_ref(), verification_nonce.as_ref()],
+        bump,
+        seeds::program = VERIFIER_PROGRAM_ID,
+    )]
+    pub verification_result: UncheckedAccount<'info>,
+
+    /// CHECK: The registry program derives and owns this read-only config PDA.
+    #[account(
+        seeds = [b"protocol_config"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    /// CHECK: The registry program derives this fee-recipient PDA.
     #[account(
         mut,
         seeds = [b"protocol_treasury"],

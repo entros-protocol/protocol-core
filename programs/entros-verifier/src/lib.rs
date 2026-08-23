@@ -78,78 +78,45 @@ pub mod entros_verifier {
         public_inputs: Vec<[u8; 32]>,
         nonce: [u8; 32],
     ) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-        let challenge = &mut ctx.accounts.challenge;
-
-        // Validate challenge state
-        require!(!challenge.used, VerifierError::ChallengeAlreadyUsed);
-        require!(now < challenge.expires_at, VerifierError::ChallengeExpired);
-
-        // Mark challenge as consumed
-        challenge.used = true;
-
-        // Validate public inputs BEFORE running the expensive Groth16 check.
-        // The circuit has 4 public inputs in order:
-        //   [0] commitment_new, [1] commitment_prev, [2] threshold, [3] min_distance
-        // Each is a 32-byte big-endian field element. An attacker controls these
-        // values, so we bound the circuit parameters here to prevent malicious
-        // thresholds that would defeat the anti-replay and distance properties.
-        require!(public_inputs.len() == 4, VerifierError::InvalidPublicInputs);
-        require!(
-            public_inputs[0] != [0u8; 32],
-            VerifierError::InvalidPublicInputs
-        );
-        require!(
-            public_inputs[1] != [0u8; 32],
-            VerifierError::InvalidPublicInputs
-        );
-        let threshold = decode_u16_from_field_element(&public_inputs[2])?;
-        let min_distance = decode_u16_from_field_element(&public_inputs[3])?;
-        require!(
-            threshold <= MAX_THRESHOLD,
-            VerifierError::InvalidPublicInputs
-        );
-        require!(
-            min_distance >= MIN_DISTANCE_FLOOR,
-            VerifierError::InvalidPublicInputs
-        );
-
-        // Run Groth16 verification — reverts the entire transaction on invalid proof
-        groth16_verifier::verify_proof(&proof_bytes, &public_inputs)?;
-
-        // Compute proof hash for audit trail
-        // Rotate-and-XOR hash: each byte position rotates the accumulator
-        // before XOR, preventing trivial collisions from byte reordering
-        let mut proof_hash = [0u8; 32];
-        for (i, &byte) in proof_bytes.iter().enumerate() {
-            let pos = i % 32;
-            proof_hash[pos] = proof_hash[pos].rotate_left(3) ^ byte;
-        }
-
-        // Store verification result (only reached for valid proofs).
-        // Commitments + bounded circuit parameters are persisted so that
-        // entros-anchor::update_anchor can cross-program read them and enforce
-        // that (a) commitment_new matches the submitted new_commitment and
-        // (b) commitment_prev matches the identity's stored current_commitment.
-        let result = &mut ctx.accounts.verification_result;
-        result.verifier = ctx.accounts.verifier.key();
-        result.proof_hash = proof_hash;
-        result.verified_at = now;
-        result.is_valid = true;
-        result.challenge_nonce = nonce;
-        result.bump = ctx.bumps.verification_result;
-        result.commitment_new = public_inputs[0];
-        result.commitment_prev = public_inputs[1];
-        result.threshold = threshold;
-        result.min_distance = min_distance;
-
-        emit!(VerificationComplete {
-            verifier: result.verifier,
-            is_valid: true,
+        let public_inputs: [[u8; 32]; 4] = public_inputs
+            .try_into()
+            .map_err(|_| VerifierError::InvalidPublicInputs)?;
+        verify_and_store(
+            &ctx.accounts.verifier,
+            &mut ctx.accounts.challenge,
+            &mut ctx.accounts.verification_result,
+            &proof_bytes,
+            &public_inputs,
             nonce,
-        });
+            ctx.bumps.verification_result,
+        )
+    }
 
-        Ok(())
+    /// Verify a proof with fixed-size arguments.
+    pub fn verify_proof_compact(
+        ctx: Context<VerifyProofCompact>,
+        nonce: [u8; 32],
+        proof_bytes: [u8; 256],
+        commitment_new: [u8; 32],
+        commitment_prev: [u8; 32],
+        threshold: u16,
+        min_distance: u16,
+    ) -> Result<()> {
+        let public_inputs = [
+            commitment_new,
+            commitment_prev,
+            encode_u16_field_element(threshold),
+            encode_u16_field_element(min_distance),
+        ];
+        verify_and_store(
+            &ctx.accounts.verifier,
+            &mut ctx.accounts.challenge,
+            &mut ctx.accounts.verification_result,
+            &proof_bytes,
+            &public_inputs,
+            nonce,
+            ctx.bumps.verification_result,
+        )
     }
 
     /// Close a used or expired challenge account to reclaim rent.
@@ -161,6 +128,69 @@ pub mod entros_verifier {
     pub fn close_verification_result(_ctx: Context<CloseVerificationResult>) -> Result<()> {
         Ok(())
     }
+}
+
+fn verify_and_store<'info>(
+    verifier: &Signer<'info>,
+    challenge: &mut Account<'info, Challenge>,
+    result: &mut Account<'info, VerificationResult>,
+    proof_bytes: &[u8],
+    public_inputs: &[[u8; 32]; 4],
+    nonce: [u8; 32],
+    verification_result_bump: u8,
+) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(!challenge.used, VerifierError::ChallengeAlreadyUsed);
+    require!(now < challenge.expires_at, VerifierError::ChallengeExpired);
+    challenge.used = true;
+
+    require!(
+        public_inputs[0] != [0u8; 32],
+        VerifierError::InvalidPublicInputs
+    );
+    require!(
+        public_inputs[1] != [0u8; 32],
+        VerifierError::InvalidPublicInputs
+    );
+    let threshold = decode_u16_from_field_element(&public_inputs[2])?;
+    let min_distance = decode_u16_from_field_element(&public_inputs[3])?;
+    require!(
+        threshold <= MAX_THRESHOLD,
+        VerifierError::InvalidPublicInputs
+    );
+    require!(
+        min_distance >= MIN_DISTANCE_FLOOR,
+        VerifierError::InvalidPublicInputs
+    );
+    require!(min_distance < threshold, VerifierError::InvalidPublicInputs);
+
+    groth16_verifier::verify_proof(proof_bytes, public_inputs)?;
+
+    let mut proof_hash = [0u8; 32];
+    for (i, &byte) in proof_bytes.iter().enumerate() {
+        let position = i % proof_hash.len();
+        proof_hash[position] = proof_hash[position].rotate_left(3) ^ byte;
+    }
+
+    result.verifier = verifier.key();
+    result.proof_hash = proof_hash;
+    result.verified_at = now;
+    result.is_valid = true;
+    result.challenge_nonce = nonce;
+    result.bump = verification_result_bump;
+    result.commitment_new = public_inputs[0];
+    result.commitment_prev = public_inputs[1];
+    result.threshold = threshold;
+    result.min_distance = min_distance;
+
+    emit!(VerificationComplete {
+        verifier: result.verifier,
+        is_valid: true,
+        nonce,
+    });
+
+    Ok(())
 }
 
 // --- Account Contexts ---
@@ -186,6 +216,32 @@ pub struct CreateChallenge<'info> {
 #[derive(Accounts)]
 #[instruction(proof_bytes: Vec<u8>, public_inputs: Vec<[u8; 32]>, nonce: [u8; 32])]
 pub struct VerifyProof<'info> {
+    #[account(mut)]
+    pub verifier: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"challenge", verifier.key().as_ref(), nonce.as_ref()],
+        bump = challenge.bump,
+        constraint = challenge.challenger == verifier.key(),
+    )]
+    pub challenge: Account<'info, Challenge>,
+
+    #[account(
+        init,
+        payer = verifier,
+        space = VerificationResult::LEN,
+        seeds = [b"verification", verifier.key().as_ref(), nonce.as_ref()],
+        bump,
+    )]
+    pub verification_result: Account<'info, VerificationResult>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(nonce: [u8; 32])]
+pub struct VerifyProofCompact<'info> {
     #[account(mut)]
     pub verifier: Signer<'info>,
 
@@ -262,4 +318,24 @@ fn decode_u16_from_field_element(fe: &[u8; 32]) -> Result<u16> {
         require!(*b == 0, VerifierError::InvalidPublicInputs);
     }
     Ok(u16::from_be_bytes([fe[30], fe[31]]))
+}
+
+fn encode_u16_field_element(value: u16) -> [u8; 32] {
+    let mut encoded = [0u8; 32];
+    encoded[30..].copy_from_slice(&value.to_be_bytes());
+    encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn u16_field_encoding_round_trips() {
+        for value in [0, 1, MIN_DISTANCE_FLOOR, MAX_THRESHOLD, u16::MAX] {
+            let encoded = encode_u16_field_element(value);
+            assert_eq!(decode_u16_from_field_element(&encoded).unwrap(), value);
+            assert_eq!(encoded[..30], [0u8; 30]);
+        }
+    }
 }
