@@ -29,17 +29,15 @@ security_txt! {
 /// In production, this is read from ProtocolConfig via CPI.
 const DEFAULT_CHALLENGE_EXPIRY: i64 = 300;
 
-/// Upper bound on the Hamming threshold an attacker can submit as a public input.
-/// 96 / 256 bits matches the SDK's `DEFAULT_THRESHOLD` (pulse-sdk/src/config.ts).
-/// Proofs asserting a larger allowed-drift window are rejected before they can
-/// produce a VerificationResult.
-const MAX_THRESHOLD: u16 = 96;
+/// Highest Hamming threshold input accepted by this program.
+/// Client defaults do not change this ceiling.
+#[constant]
+pub const MAX_THRESHOLD: u16 = 96;
 
-/// Lower bound on the Hamming min_distance an attacker can submit as a public input.
-/// 3 / 256 bits matches the SDK's `DEFAULT_MIN_DISTANCE`. Proofs asserting a
-/// smaller min_distance would pass Hamming=0 (exact replay), defeating the
-/// circuit's anti-replay intent.
-const MIN_DISTANCE_FLOOR: u16 = 3;
+/// Lowest minimum-distance input accepted by this program.
+/// Client defaults do not change this floor.
+#[constant]
+pub const MIN_DISTANCE_FLOOR: u16 = 3;
 
 #[program]
 pub mod entros_verifier {
@@ -155,15 +153,7 @@ fn verify_and_store<'info>(
     );
     let threshold = decode_u16_from_field_element(&public_inputs[2])?;
     let min_distance = decode_u16_from_field_element(&public_inputs[3])?;
-    require!(
-        threshold <= MAX_THRESHOLD,
-        VerifierError::InvalidPublicInputs
-    );
-    require!(
-        min_distance >= MIN_DISTANCE_FLOOR,
-        VerifierError::InvalidPublicInputs
-    );
-    require!(min_distance < threshold, VerifierError::InvalidPublicInputs);
+    validate_hamming_bounds(threshold, min_distance)?;
 
     groth16_verifier::verify_proof(proof_bytes, public_inputs)?;
 
@@ -320,6 +310,19 @@ fn decode_u16_from_field_element(fe: &[u8; 32]) -> Result<u16> {
     Ok(u16::from_be_bytes([fe[30], fe[31]]))
 }
 
+fn validate_hamming_bounds(threshold: u16, min_distance: u16) -> Result<()> {
+    require!(
+        threshold <= MAX_THRESHOLD,
+        VerifierError::InvalidPublicInputs
+    );
+    require!(
+        min_distance >= MIN_DISTANCE_FLOOR,
+        VerifierError::InvalidPublicInputs
+    );
+    require!(min_distance < threshold, VerifierError::InvalidPublicInputs);
+    Ok(())
+}
+
 fn encode_u16_field_element(value: u16) -> [u8; 32] {
     let mut encoded = [0u8; 32];
     encoded[30..].copy_from_slice(&value.to_be_bytes());
@@ -337,5 +340,25 @@ mod tests {
             assert_eq!(decode_u16_from_field_element(&encoded).unwrap(), value);
             assert_eq!(encoded[..30], [0u8; 30]);
         }
+    }
+
+    #[test]
+    fn hamming_bounds_accept_the_program_ceiling_and_floor() {
+        assert!(validate_hamming_bounds(MAX_THRESHOLD, MIN_DISTANCE_FLOOR).is_ok());
+    }
+
+    #[test]
+    fn hamming_bounds_reject_a_threshold_above_the_program_ceiling() {
+        assert!(validate_hamming_bounds(MAX_THRESHOLD + 1, MIN_DISTANCE_FLOOR).is_err());
+    }
+
+    #[test]
+    fn hamming_bounds_reject_a_minimum_below_the_program_floor() {
+        assert!(validate_hamming_bounds(MAX_THRESHOLD, MIN_DISTANCE_FLOOR - 1).is_err());
+    }
+
+    #[test]
+    fn hamming_bounds_reject_an_empty_acceptance_interval() {
+        assert!(validate_hamming_bounds(MIN_DISTANCE_FLOOR, MIN_DISTANCE_FLOOR).is_err());
     }
 }
