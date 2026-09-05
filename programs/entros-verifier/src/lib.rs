@@ -1,10 +1,13 @@
 #![deny(clippy::all)]
+#![cfg_attr(feature = "cpi", allow(clippy::too_many_arguments))]
 #![allow(unexpected_cfgs)] // Anchor emits SBF-only cfg values during host builds.
 
 use anchor_lang::prelude::*;
 use solana_security_txt::security_txt;
 
+mod bound;
 mod errors;
+use bound::*;
 mod groth16_verifier;
 #[cfg(test)]
 mod mock_verifier;
@@ -117,6 +120,36 @@ pub mod entros_verifier {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_proof_bound(
+        ctx: Context<VerifyProofBound>,
+        nonce: [u8; 32],
+        proof_bytes: [u8; 256],
+        commitment_new: [u8; 32],
+        commitment_prev: [u8; 32],
+        threshold: u16,
+        min_distance: u16,
+        valid_until: u64,
+    ) -> Result<()> {
+        bound::verify(
+            ctx,
+            nonce,
+            proof_bytes,
+            commitment_new,
+            commitment_prev,
+            threshold,
+            min_distance,
+            valid_until,
+        )
+    }
+
+    pub fn close_bound_verification_result(
+        _ctx: Context<CloseBoundVerificationResult>,
+        _nonce: [u8; 32],
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Close a used or expired challenge account to reclaim rent.
     pub fn close_challenge(_ctx: Context<CloseChallenge>) -> Result<()> {
         Ok(())
@@ -137,6 +170,10 @@ fn verify_and_store<'info>(
     nonce: [u8; 32],
     verification_result_bump: u8,
 ) -> Result<()> {
+    require!(
+        !cfg!(feature = "request-bound-v1"),
+        VerifierError::UnsupportedProofGeneration
+    );
     let now = Clock::get()?.unix_timestamp;
 
     require!(!challenge.used, VerifierError::ChallengeAlreadyUsed);

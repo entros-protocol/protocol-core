@@ -18,4 +18,8 @@ pub enum VerifierError {
     InvalidNonce,
     #[msg("Arithmetic overflow")]
     ArithmeticOverflow,
+    #[msg("Unsupported proof generation")]
+    UnsupportedProofGeneration,
+    #[msg("Invalid proof request context")]
+    InvalidRequestContext,
 }

@@ -78,4 +78,8 @@ pub enum EntrosAnchorError {
     ProjectionVersionMismatch,
     #[msg("Reset requires exactly one instructions sysvar account for versioned projections and none for projection zero")]
     InvalidResetReceiptAccounts,
+    #[msg("Unsupported proof generation")]
+    UnsupportedProofGeneration,
+    #[msg("Invalid proof request context")]
+    InvalidRequestContext,
 }
