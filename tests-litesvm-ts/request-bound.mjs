@@ -736,10 +736,30 @@ for (const length of [207, 592]) {
   );
   svm.setAccount(map.identity_state, original);
 }
+const { runAdversarialChecks } =
+  await import("./request-bound-adversarial.mjs");
+const adversarial = await runAdversarialChecks({
+  svm,
+  dir,
+  artifacts,
+  idls,
+  addresses,
+  ix,
+  meta,
+  send,
+  counter,
+  receipt,
+  pda,
+  generateValidInput,
+  createProof,
+  input,
+  previous,
+  next,
+});
 writeFileSync(
   join(dir, "request-bound-report.json"),
   JSON.stringify(
-    { syntheticOnly: true, context, proof, results: reports },
+    { syntheticOnly: true, context, proof, results: reports, adversarial },
     null,
     2,
   ),
