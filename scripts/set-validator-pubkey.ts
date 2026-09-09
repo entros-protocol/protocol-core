@@ -2,8 +2,6 @@
  * One-time admin migration: set ProtocolConfig.validator_pubkey on devnet.
  * Triggers the realloc 77 -> 109 bytes via the Anchor realloc constraint.
  *
- * Master-list #146 Phase 3.
- *
  * Run from protocol-core directory:
  *   npx tsx scripts/set-validator-pubkey.ts
  *
