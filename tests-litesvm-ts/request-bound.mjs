@@ -48,6 +48,9 @@ assert.equal(typeof createProof, "function");
 
 const dir = process.env.ENTROS_BOUND_PROGRAM_DIR;
 const artifacts = process.env.ENTROS_BOUND_ARTIFACT_DIR;
+const deploymentDomain =
+  process.env.ENTROS_BOUND_DEPLOYMENT_DOMAIN ?? "11".repeat(32);
+assert.match(deploymentDomain, /^[0-9a-f]{64}$/);
 assert.ok(
   dir && artifacts,
   "Isolated program and artifact directories are required",
@@ -242,7 +245,7 @@ const nonce = Buffer.alloc(32, 91),
 const context = {
   schema: "request-bound-v1",
   fields: {
-    deployment: "11".repeat(32),
+    deployment: deploymentDomain,
     verifier: hex(verifierAddr),
     consumer: hex(anchorAddr),
     wallet: hex(wallet.publicKey),
@@ -628,38 +631,40 @@ send(
   "ArithmeticOverflow",
 );
 assert.equal(counter(other.publicKey), 2n ** 64n - 1n);
-svm.addProgramFromFile(
-  anchorAddr,
-  join(dir, "default-programs", "entros_anchor.so"),
-);
-const preactivation = deterministicKeypair(92);
-svm.airdrop(preactivation.publicKey, 10_000_000_000n);
-const beforeMap = addresses(preactivation.publicKey);
-send(
-  "default mint preserves legacy account ABI",
-  [
-    receipt(preactivation.publicKey, previous, 1),
-    ix(
-      "entros_anchor",
-      "mint_anchor",
-      { initial_commitment: previous },
-      beforeMap,
-    ),
-  ],
-  [preactivation],
-);
-assert.equal(svm.getAccount(beforeMap.proof_request_state), null);
-svm.addProgramFromFile(anchorAddr, join(dir, "programs", "entros_anchor.so"));
-const newDestination = deterministicKeypair(93);
-svm.airdrop(newDestination.publicKey, 10_000_000_000n);
-authorize(preactivation, newDestination);
-migrate(
-  preactivation,
-  newDestination,
-  "delegated migration initializes absent source state",
-);
-assert.equal(counter(preactivation.publicKey), 1n);
-assert.equal(counter(newDestination.publicKey), 1n);
+if (!process.env.ENTROS_ISOLATED_PROGRAM_IDS) {
+  svm.addProgramFromFile(
+    anchorAddr,
+    join(dir, "default-programs", "entros_anchor.so"),
+  );
+  const preactivation = deterministicKeypair(92);
+  svm.airdrop(preactivation.publicKey, 10_000_000_000n);
+  const beforeMap = addresses(preactivation.publicKey);
+  send(
+    "default mint preserves legacy account ABI",
+    [
+      receipt(preactivation.publicKey, previous, 1),
+      ix(
+        "entros_anchor",
+        "mint_anchor",
+        { initial_commitment: previous },
+        beforeMap,
+      ),
+    ],
+    [preactivation],
+  );
+  assert.equal(svm.getAccount(beforeMap.proof_request_state), null);
+  svm.addProgramFromFile(anchorAddr, join(dir, "programs", "entros_anchor.so"));
+  const newDestination = deterministicKeypair(93);
+  svm.airdrop(newDestination.publicKey, 10_000_000_000n);
+  authorize(preactivation, newDestination);
+  migrate(
+    preactivation,
+    newDestination,
+    "delegated migration initializes absent source state",
+  );
+  assert.equal(counter(preactivation.publicKey), 1n);
+  assert.equal(counter(newDestination.publicKey), 1n);
+}
 for (const [index, length] of [543, 551, 583].entries()) {
   const oldWallet = deterministicKeypair(94 + index);
   svm.airdrop(oldWallet.publicKey, 10_000_000_000n);
@@ -738,24 +743,30 @@ for (const length of [207, 592]) {
 }
 const { runAdversarialChecks } =
   await import("./request-bound-adversarial.mjs");
-const adversarial = await runAdversarialChecks({
-  svm,
-  dir,
-  artifacts,
-  idls,
-  addresses,
-  ix,
-  meta,
-  send,
-  counter,
-  receipt,
-  pda,
-  generateValidInput,
-  createProof,
-  input,
-  previous,
-  next,
-});
+const adversarial = process.env.ENTROS_ISOLATED_PROGRAM_IDS
+  ? {
+      scope:
+        "Shared-address upgrade fixtures run separately with official program IDs.",
+    }
+  : await runAdversarialChecks({
+      deploymentDomain,
+      svm,
+      dir,
+      artifacts,
+      idls,
+      addresses,
+      ix,
+      meta,
+      send,
+      counter,
+      receipt,
+      pda,
+      generateValidInput,
+      createProof,
+      input,
+      previous,
+      next,
+    });
 writeFileSync(
   join(dir, "request-bound-report.json"),
   JSON.stringify(

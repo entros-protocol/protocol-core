@@ -987,6 +987,9 @@ name = "entros-proof-request"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "bs58",
+ "serde",
+ "serde_json",
  "solana-sha256-hasher 3.1.0",
 ]
 

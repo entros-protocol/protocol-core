@@ -15,6 +15,7 @@ import {
 } from "./encodeDecode.ts";
 
 export async function runAdversarialChecks({
+  deploymentDomain,
   svm,
   dir,
   artifacts,
@@ -205,7 +206,7 @@ export async function runAdversarialChecks({
     const context = {
       schema: "request-bound-v1",
       fields: {
-        deployment: "11".repeat(32),
+        deployment: deploymentDomain,
         verifier: hex(verifierAddr),
         consumer: hex(anchorAddr),
         wallet: hex(wallet.publicKey),

@@ -2,8 +2,7 @@
 use anchor_lang::prelude::*;
 use solana_sha256_hasher::hash;
 
-declare_id!("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV");
-pub const ANCHOR_ID: Pubkey = pubkey!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
+include!(concat!(env!("OUT_DIR"), "/program_ids.rs"));
 pub const GENERATION: u8 = 1;
 pub const STATE_LEN: usize = 50;
 pub const MAX_REQUEST_LIFETIME: u64 = 300;

@@ -18,7 +18,7 @@ mod verifying_key;
 use errors::VerifierError;
 use state::{Challenge, VerificationResult};
 
-declare_id!("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV");
+entros_proof_request::declare_verifier_program_id!();
 
 security_txt! {
     name: "Entros Verifier",
@@ -369,6 +369,14 @@ fn encode_u16_field_element(value: u16) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_address_matches_result_owner() {
+        assert_eq!(
+            crate::ID,
+            <entros_proof_request::BoundVerificationResult as anchor_lang::Owner>::owner()
+        );
+    }
 
     #[test]
     fn u16_field_encoding_round_trips() {

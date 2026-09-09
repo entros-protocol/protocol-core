@@ -66,3 +66,11 @@ for (const args of [
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
+const configurationChecks = spawnSync(
+  process.execPath,
+  [join(root, "scripts/check-program-config.mjs")],
+  { cwd: root, env: environment, stdio: "inherit" },
+);
+if (configurationChecks.error) throw configurationChecks.error;
+if (configurationChecks.status !== 0)
+  process.exit(configurationChecks.status ?? 1);

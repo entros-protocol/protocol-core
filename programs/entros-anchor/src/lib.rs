@@ -29,7 +29,7 @@ use state::EncryptedBaseline;
 /// Public account type for cross-program clients that read Entros Anchor state.
 pub use state::IdentityState;
 
-declare_id!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
+entros_proof_request::declare_anchor_program_id!();
 
 security_txt! {
     name: "Entros Anchor",
@@ -47,11 +47,7 @@ const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 ]);
 
 /// entros-verifier program ID for cross-program VerificationResult PDA validation.
-/// Decoded from: 4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV
-const VERIFIER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    48, 50, 94, 115, 90, 162, 108, 8, 240, 151, 76, 223, 101, 176, 170, 86, 254, 247, 252, 28, 240,
-    145, 60, 108, 42, 129, 105, 32, 232, 212, 226, 52,
-]);
+const VERIFIER_PROGRAM_ID: Pubkey = entros_proof_request::ID_CONST;
 
 /// Maximum age of a VerificationResult consumed by update_anchor, in seconds.
 /// Bounds the verify-to-consume window separately from challenge_expiry
@@ -2207,6 +2203,15 @@ pub struct AnchorRebaselined {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn program_addresses_match_shared_owners() {
+        assert_eq!(crate::ID, entros_proof_request::ANCHOR_ID);
+        assert_eq!(
+            super::VERIFIER_PROGRAM_ID,
+            <entros_proof_request::BoundVerificationResult as anchor_lang::Owner>::owner()
+        );
+    }
+
     use super::{
         read_projection_policy, record_verification, validate_identity_projection,
         validate_requested_projection, verify_receipt_payload, ProjectionPolicy, ReceiptPurpose,
