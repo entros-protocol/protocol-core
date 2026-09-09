@@ -34,8 +34,36 @@ import {
 import { PublicKey } from "@solana/web3.js";
 
 //-----------== Basic settings
+function testProgramIds():
+  | {
+      consumerProgram: string;
+      verifierProgram: string;
+    }
+  | undefined {
+  const configPath = process.env.ENTROS_ISOLATED_PROGRAM_IDS;
+  if (!configPath) return undefined;
+  const value: unknown = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("consumerProgram" in value) ||
+    typeof value.consumerProgram !== "string" ||
+    !("verifierProgram" in value) ||
+    typeof value.verifierProgram !== "string"
+  ) {
+    throw new Error(
+      "Explicit paired program addresses are required for isolated tests",
+    );
+  }
+  return {
+    consumerProgram: value.consumerProgram,
+    verifierProgram: value.verifierProgram,
+  };
+}
+const isolatedPrograms = testProgramIds();
 export const anchorAddr = new PublicKey(
-  "GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2",
+  isolatedPrograms?.consumerProgram ??
+    "GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2",
 );
 console.log("anchorAddr:", anchorAddr.toBase58());
 
@@ -45,7 +73,8 @@ export const registryAddr = new PublicKey(
 console.log("registryAddr:", registryAddr.toBase58());
 
 export const verifierAddr = new PublicKey(
-  "4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV",
+  isolatedPrograms?.verifierProgram ??
+    "4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV",
 );
 console.log("verifierAddr:", verifierAddr.toBase58());
 export const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");

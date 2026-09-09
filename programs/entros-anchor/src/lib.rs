@@ -3,6 +3,10 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+#[cfg(not(feature = "request-bound-v1"))]
+use anchor_spl::associated_token::create as create_identity_token_account;
+#[cfg(feature = "request-bound-v1")]
+use anchor_spl::associated_token::create_idempotent as create_identity_token_account;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_2022::{
     self, burn, close_account, spl_token_2022, Approve, Burn, CloseAccount,
@@ -15,6 +19,9 @@ use solana_security_txt::security_txt;
 use spl_token_2022::extension::ExtensionType;
 
 mod errors;
+mod proof_request;
+use entros_proof_request::BoundVerificationResult;
+use proof_request::*;
 mod state;
 
 use errors::EntrosAnchorError;
@@ -22,7 +29,7 @@ use state::EncryptedBaseline;
 /// Public account type for cross-program clients that read Entros Anchor state.
 pub use state::IdentityState;
 
-declare_id!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
+entros_proof_request::declare_anchor_program_id!();
 
 security_txt! {
     name: "Entros Anchor",
@@ -40,11 +47,7 @@ const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 ]);
 
 /// entros-verifier program ID for cross-program VerificationResult PDA validation.
-/// Decoded from: 4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV
-const VERIFIER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    48, 50, 94, 115, 90, 162, 108, 8, 240, 151, 76, 223, 101, 176, 170, 86, 254, 247, 252, 28, 240,
-    145, 60, 108, 42, 129, 105, 32, 232, 212, 226, 52,
-]);
+const VERIFIER_PROGRAM_ID: Pubkey = entros_proof_request::ID_CONST;
 
 /// Maximum age of a VerificationResult consumed by update_anchor, in seconds.
 /// Bounds the verify-to-consume window separately from challenge_expiry
@@ -457,7 +460,12 @@ struct AnchorUpdateAccounts<'a, 'info> {
 fn process_anchor_update(
     accounts: AnchorUpdateAccounts<'_, '_>,
     expected_new_commitment: Option<[u8; 32]>,
+    bound_state: Option<(&AccountInfo<'_>, [u8; 32])>,
 ) -> Result<()> {
+    require!(
+        bound_state.is_some() == cfg!(feature = "request-bound-v1"),
+        EntrosAnchorError::UnsupportedProofGeneration
+    );
     let identity_info = accounts.identity_state;
     require!(
         identity_info.owner == &crate::ID,
@@ -526,42 +534,128 @@ fn process_anchor_update(
         EntrosAnchorError::VerificationResultWrongOwner
     );
     let verification_data = verification_info.try_borrow_data()?;
-    require!(
-        verification_data.len() >= VERIFICATION_RESULT_LEN_V2,
-        EntrosAnchorError::StaleVerificationResult
-    );
-    require!(
-        verification_data[0..8] == VERIFICATION_RESULT_DISCRIMINATOR,
-        EntrosAnchorError::StaleVerificationResult
-    );
+    let (commitment_new, commitment_prev) = if let Some((request_state, nonce)) = bound_state {
+        require!(
+            cfg!(feature = "request-bound-v1"),
+            EntrosAnchorError::UnsupportedProofGeneration
+        );
+        require!(
+            verification_data.len() == BoundVerificationResult::LEN,
+            EntrosAnchorError::InvalidRequestContext
+        );
+        let result = BoundVerificationResult::try_deserialize(&mut &verification_data[..])
+            .map_err(|_| EntrosAnchorError::InvalidRequestContext)?;
+        let wallet = accounts.authority.key();
+        let (state_key, bump) =
+            Pubkey::find_program_address(&[b"proof_request_state", wallet.as_ref()], &crate::ID);
+        require_keys_eq!(
+            *request_state.key,
+            state_key,
+            EntrosAnchorError::InvalidRequestContext
+        );
+        require_keys_eq!(
+            *request_state.owner,
+            crate::ID,
+            EntrosAnchorError::InvalidRequestContext
+        );
+        let counter =
+            entros_proof_request::read_counter(&request_state.try_borrow_data()?, wallet, bump)
+                .ok_or(EntrosAnchorError::InvalidRequestContext)?;
+        require!(
+            result.version == entros_proof_request::GENERATION
+                && result.wallet == wallet
+                && result.counter == counter
+                && result.nonce == nonce,
+            EntrosAnchorError::InvalidRequestContext
+        );
+        require!(
+            result.verified_at <= now
+                && now >= 0
+                && result.valid_until >= now as u64
+                && result.valid_until > 0,
+            EntrosAnchorError::ProofExpired
+        );
+        #[cfg(feature = "request-bound-v1")]
+        {
+            let action = entros_proof_request::Action {
+                identity: identity_info.key(),
+                mint: identity.mint,
+                counter,
+                projection: identity.projection_version,
+                commitment_new: result.commitment_new,
+                commitment_prev: result.commitment_prev,
+                threshold: result.threshold,
+                min_distance: result.min_distance,
+                valid_until: result.valid_until,
+            };
+            let digest = entros_proof_request::request_digest(
+                entros_proof_request::DEPLOYMENT_DOMAIN,
+                VERIFIER_PROGRAM_ID,
+                crate::ID,
+                wallet,
+                nonce,
+                &action,
+            )
+            .ok_or(EntrosAnchorError::InvalidRequestContext)?;
+            require!(
+                result.request_digest == digest,
+                EntrosAnchorError::InvalidRequestContext
+            );
+        }
+        require!(
+            request_state.is_writable,
+            EntrosAnchorError::InvalidRequestContext
+        );
+        let next = counter
+            .checked_add(1)
+            .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
+        request_state.try_borrow_mut_data()?[41..49].copy_from_slice(&next.to_le_bytes());
+        (result.commitment_new, result.commitment_prev)
+    } else {
+        require!(
+            !cfg!(feature = "request-bound-v1"),
+            EntrosAnchorError::UnsupportedProofGeneration
+        );
+        require!(
+            verification_data.len() >= VERIFICATION_RESULT_LEN_V2,
+            EntrosAnchorError::StaleVerificationResult
+        );
+        require!(
+            verification_data[0..8] == VERIFICATION_RESULT_DISCRIMINATOR,
+            EntrosAnchorError::StaleVerificationResult
+        );
 
-    let verifier_bytes: [u8; 32] = verification_data[VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
-        .try_into()
-        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
-    require!(
-        Pubkey::new_from_array(verifier_bytes) == accounts.authority.key(),
-        EntrosAnchorError::VerifierMismatch
-    );
+        let verifier_bytes: [u8; 32] = verification_data
+            [VR_OFFSET_VERIFIER..VR_OFFSET_VERIFIER + 32]
+            .try_into()
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+        require!(
+            Pubkey::new_from_array(verifier_bytes) == accounts.authority.key(),
+            EntrosAnchorError::VerifierMismatch
+        );
 
-    let verified_at_bytes: [u8; 8] = verification_data
-        [VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
-        .try_into()
-        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
-    let verified_at = i64::from_le_bytes(verified_at_bytes);
-    require!(verified_at <= now, EntrosAnchorError::ProofFromFuture);
-    require!(
-        now.saturating_sub(verified_at) <= MAX_PROOF_AGE_SECS,
-        EntrosAnchorError::ProofExpired
-    );
+        let verified_at_bytes: [u8; 8] = verification_data
+            [VR_OFFSET_VERIFIED_AT..VR_OFFSET_VERIFIED_AT + 8]
+            .try_into()
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+        let verified_at = i64::from_le_bytes(verified_at_bytes);
+        require!(verified_at <= now, EntrosAnchorError::ProofFromFuture);
+        require!(
+            now.saturating_sub(verified_at) <= MAX_PROOF_AGE_SECS,
+            EntrosAnchorError::ProofExpired
+        );
 
-    let commitment_new: [u8; 32] = verification_data
-        [VR_OFFSET_COMMITMENT_NEW..VR_OFFSET_COMMITMENT_NEW + 32]
-        .try_into()
-        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
-    let commitment_prev: [u8; 32] = verification_data
-        [VR_OFFSET_COMMITMENT_PREV..VR_OFFSET_COMMITMENT_PREV + 32]
-        .try_into()
-        .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+        let commitment_new: [u8; 32] = verification_data
+            [VR_OFFSET_COMMITMENT_NEW..VR_OFFSET_COMMITMENT_NEW + 32]
+            .try_into()
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+        let commitment_prev: [u8; 32] = verification_data
+            [VR_OFFSET_COMMITMENT_PREV..VR_OFFSET_COMMITMENT_PREV + 32]
+            .try_into()
+            .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
+
+        (commitment_new, commitment_prev)
+    };
     drop(verification_data);
 
     require!(
@@ -649,10 +743,56 @@ fn process_anchor_update(
 pub mod entros_anchor {
     use super::*;
 
+    pub fn upgrade_identity_layout(ctx: Context<UpgradeIdentityLayout>) -> Result<()> {
+        proof_request::upgrade_identity_layout(ctx)
+    }
+
+    pub fn prepare_proof_request(ctx: Context<PrepareProofRequest>) -> Result<()> {
+        proof_request::prepare(ctx)
+    }
+
+    pub fn update_anchor_bound(
+        ctx: Context<UpdateAnchorBound>,
+        verification_nonce: [u8; 32],
+    ) -> Result<()> {
+        process_anchor_update(
+            AnchorUpdateAccounts {
+                authority: &ctx.accounts.authority,
+                identity_state: &ctx.accounts.identity_state,
+                verification_result: &ctx.accounts.verification_result,
+                protocol_config: &ctx.accounts.protocol_config,
+                treasury: &ctx.accounts.treasury,
+                system_program: &ctx.accounts.system_program,
+            },
+            None,
+            Some((
+                &ctx.accounts.proof_request_state.to_account_info(),
+                verification_nonce,
+            )),
+        )
+    }
+
     /// Mint a new Entros Anchor identity for the caller.
     /// Creates a NonTransferable Token-2022 mint, mints 1 token to the user's ATA,
     /// and initializes the IdentityState PDA.
-    pub fn mint_anchor(ctx: Context<MintAnchor>, initial_commitment: [u8; 32]) -> Result<()> {
+    pub fn mint_anchor<'info>(
+        ctx: Context<'info, MintAnchor<'info>>,
+        initial_commitment: [u8; 32],
+    ) -> Result<()> {
+        #[cfg(feature = "request-bound-v1")]
+        {
+            require!(
+                ctx.remaining_accounts.len() == 1,
+                EntrosAnchorError::InvalidRequestContext
+            );
+            proof_request::advance(
+                &ctx.remaining_accounts[0],
+                ctx.accounts.user.key(),
+                &ctx.accounts.user.to_account_info(),
+                &ctx.accounts.system_program.to_account_info(),
+            )?;
+        }
+
         require!(
             initial_commitment != [0u8; 32],
             EntrosAnchorError::InvalidCommitment
@@ -764,7 +904,7 @@ pub mod entros_anchor {
         // 4. Create the user's Associated Token Account
         #[cfg(feature = "debug-logs")]
         msg!("create user ata");
-        anchor_spl::associated_token::create(CpiContext::new(
+        create_identity_token_account(CpiContext::new(
             ctx.accounts.associated_token_program.key(),
             anchor_spl::associated_token::Create {
                 payer: ctx.accounts.user.to_account_info(),
@@ -903,7 +1043,36 @@ pub mod entros_anchor {
 
     /// Migrate from an user's old Anchor IdentityState PDA to a new one
     /// After this function call, the orphaned 0-balance ATA, pointing at a closed mint, locks ~0.002 SOL of rent. This ATA can be recovered by the old wallet calling closeAccount()
-    pub fn migrate_identity(ctx: Context<MigrateIdentity>) -> Result<()> {
+    pub fn migrate_identity<'info>(ctx: Context<'info, MigrateIdentity<'info>>) -> Result<()> {
+        #[cfg(feature = "request-bound-v1")]
+        {
+            require!(
+                ctx.remaining_accounts.len() == 2,
+                EntrosAnchorError::InvalidRequestContext
+            );
+            require!(
+                ctx.accounts.identity_state_old.owner == ctx.accounts.wallet_old.key()
+                    && ctx.accounts.identity_state_old.new_wallet == ctx.accounts.user.key(),
+                EntrosAnchorError::UnauthorizedNewWallet
+            );
+            require!(
+                ctx.accounts.wallet_old.key() != ctx.accounts.user.key(),
+                EntrosAnchorError::InvalidRequestContext
+            );
+            proof_request::advance(
+                &ctx.remaining_accounts[0],
+                ctx.accounts.identity_state_old.owner,
+                &ctx.accounts.user.to_account_info(),
+                &ctx.accounts.system_program.to_account_info(),
+            )?;
+            proof_request::advance(
+                &ctx.remaining_accounts[1],
+                ctx.accounts.user.key(),
+                &ctx.accounts.user.to_account_info(),
+                &ctx.accounts.system_program.to_account_info(),
+            )?;
+        }
+
         let user_key = ctx.accounts.user.key();
         let mint_seeds: &[&[u8]] = &[b"mint", user_key.as_ref(), &[ctx.bumps.mint]];
         let mint_authority_seeds: &[&[u8]] = &[b"mint_authority", &[ctx.bumps.mint_authority]];
@@ -1010,7 +1179,7 @@ pub mod entros_anchor {
         // 4. Create the user's Associated Token Account
         #[cfg(feature = "debug-logs")]
         msg!("create user ata");
-        anchor_spl::associated_token::create(CpiContext::new(
+        create_identity_token_account(CpiContext::new(
             ctx.accounts.associated_token_program.key(),
             anchor_spl::associated_token::Create {
                 payer: ctx.accounts.user.to_account_info(),
@@ -1165,6 +1334,7 @@ pub mod entros_anchor {
                 system_program: &ctx.accounts.system_program,
             },
             Some(new_commitment),
+            None,
         )
     }
 
@@ -1183,6 +1353,7 @@ pub mod entros_anchor {
                 treasury: &ctx.accounts.treasury,
                 system_program: &ctx.accounts.system_program,
             },
+            None,
             None,
         )
     }
@@ -1207,11 +1378,28 @@ pub mod entros_anchor {
     /// Reset does not consume a ZK comparison proof because the client cannot
     /// recover its prior fingerprint. Versioned projections require a fresh
     /// validator receipt bound to this wallet, commitment, and reset purpose.
-    pub fn reset_identity_state(
-        ctx: Context<ResetIdentityState>,
+    pub fn reset_identity_state<'info>(
+        ctx: Context<'info, ResetIdentityState<'info>>,
         new_commitment: [u8; 32],
         projection_version: u16,
     ) -> Result<()> {
+        #[cfg(feature = "request-bound-v1")]
+        let receipt_accounts = {
+            let (state, receipt_accounts) = ctx
+                .remaining_accounts
+                .split_last()
+                .ok_or(EntrosAnchorError::InvalidRequestContext)?;
+            proof_request::advance(
+                state,
+                ctx.accounts.authority.key(),
+                &ctx.accounts.authority.to_account_info(),
+                &ctx.accounts.system_program.to_account_info(),
+            )?;
+            receipt_accounts
+        };
+        #[cfg(not(feature = "request-bound-v1"))]
+        let receipt_accounts = ctx.remaining_accounts;
+
         require!(
             new_commitment != [0u8; 32],
             EntrosAnchorError::InvalidCommitment
@@ -1303,10 +1491,10 @@ pub mod entros_anchor {
 
         if projection_policy.current > 0 {
             require!(
-                ctx.remaining_accounts.len() == 1,
+                receipt_accounts.len() == 1,
                 EntrosAnchorError::InvalidResetReceiptAccounts
             );
-            let instructions_sysvar = &ctx.remaining_accounts[0];
+            let instructions_sysvar = &receipt_accounts[0];
             require_keys_eq!(
                 *instructions_sysvar.key,
                 solana_instructions_sysvar::id(),
@@ -1323,7 +1511,7 @@ pub mod entros_anchor {
             )?;
         } else {
             require!(
-                ctx.remaining_accounts.is_empty(),
+                receipt_accounts.is_empty(),
                 EntrosAnchorError::InvalidResetReceiptAccounts
             );
         }
@@ -1409,11 +1597,25 @@ pub mod entros_anchor {
     /// Rebaseline the user's commitment to the new version projection space.
     /// Skips the cross-space Hamming proof. Verification is performed via a
     /// validator-signed humanness receipt for the new-version commitment.
-    pub fn rebaseline_anchor(
-        ctx: Context<RebaselineAnchor>,
+    pub fn rebaseline_anchor<'info>(
+        ctx: Context<'info, RebaselineAnchor<'info>>,
         new_commitment: [u8; 32],
         projection_version: u16,
     ) -> Result<()> {
+        #[cfg(feature = "request-bound-v1")]
+        {
+            require!(
+                ctx.remaining_accounts.len() == 1,
+                EntrosAnchorError::InvalidRequestContext
+            );
+            proof_request::advance(
+                &ctx.remaining_accounts[0],
+                ctx.accounts.authority.key(),
+                &ctx.accounts.authority.to_account_info(),
+                &ctx.accounts.system_program.to_account_info(),
+            )?;
+        }
+
         require!(
             new_commitment != [0u8; 32],
             EntrosAnchorError::InvalidCommitment
@@ -1804,6 +2006,52 @@ pub struct UpdateAnchorCompact<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(verification_nonce: [u8; 32])]
+pub struct UpdateAnchorBound<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: The PDA constraint binds this account to the signing authority.
+    #[account(
+        mut,
+        seeds = [b"identity", authority.key().as_ref()],
+        bump,
+    )]
+    pub identity_state: UncheckedAccount<'info>,
+
+    /// CHECK: Exact owner, layout, wallet and counter checks precede the atomic write.
+    #[account(mut, seeds = [b"proof_request_state", authority.key().as_ref()], bump, owner = crate::ID)]
+    pub proof_request_state: UncheckedAccount<'info>,
+
+    /// CHECK: The verifier program and nonce derive this read-only result PDA.
+    #[account(
+        seeds = [b"verification_bound", authority.key().as_ref(), verification_nonce.as_ref()],
+        bump,
+        seeds::program = VERIFIER_PROGRAM_ID,
+    )]
+    pub verification_result: UncheckedAccount<'info>,
+
+    /// CHECK: The registry program derives and owns this read-only config PDA.
+    #[account(
+        seeds = [b"protocol_config"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    /// CHECK: The registry program derives this fee-recipient PDA.
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = REGISTRY_PROGRAM_ID,
+    )]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ResetIdentityState<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -1955,6 +2203,15 @@ pub struct AnchorRebaselined {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn program_addresses_match_shared_owners() {
+        assert_eq!(crate::ID, entros_proof_request::ANCHOR_ID);
+        assert_eq!(
+            super::VERIFIER_PROGRAM_ID,
+            <entros_proof_request::BoundVerificationResult as anchor_lang::Owner>::owner()
+        );
+    }
+
     use super::{
         read_projection_policy, record_verification, validate_identity_projection,
         validate_requested_projection, verify_receipt_payload, ProjectionPolicy, ReceiptPurpose,

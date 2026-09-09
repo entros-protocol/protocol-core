@@ -10,14 +10,16 @@ name = "entros_verifier"
 
 [features]
 default = []
+request-bound-v1 = ["entros-proof-request/request-bound-v1"]
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build"]
+idl-build = ["entros-proof-request/idl-build","anchor-lang/idl-build"]
 debug-logs = []
 
 [dependencies]
 anchor-lang = "1.1.2"
 groth16-solana = "=0.2.0"
 solana-security-txt = "1.1.2"
+entros-proof-request = { path = "../../crates/proof-request" }

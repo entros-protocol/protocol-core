@@ -80,9 +80,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-          cargo test --workspace --all-features --locked
+          node scripts/check-rust.mjs
 
       - name: Install Solana and Anchor
         shell: bash
