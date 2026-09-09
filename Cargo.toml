@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/proof-request",
     "programs/entros-registry",
     "programs/entros-anchor",
     "programs/entros-verifier",

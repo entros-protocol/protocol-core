@@ -1,0 +1,17 @@
+[package]
+name = "entros-proof-request"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+request-bound-v1 = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "1.1.2"
+solana-sha256-hasher = "=3.1.0"
+
+[build-dependencies]
+bs58 = "0.5.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
