@@ -1,10 +1,10 @@
-// Mock Groth16 verification for Phase 1.
+// Mock Groth16 verification.
 //
 // Accepts any proof where the first 4 bytes equal [0x49, 0x41, 0x4D, 0x01] ("Entros\x01").
 // This magic prefix allows tests to construct valid/invalid proofs trivially.
 //
-// In Phase 2, this is replaced by groth16_solana::groth16::Groth16Verifier
-// with real circuit verification keys and proof validation.
+// The real path replaces this with groth16_solana::groth16::Groth16Verifier
+// and genuine circuit verification keys.
 
 const MOCK_PROOF_MAGIC: [u8; 4] = [0x49, 0x41, 0x4D, 0x01];
 
@@ -12,7 +12,7 @@ const MOCK_PROOF_MAGIC: [u8; 4] = [0x49, 0x41, 0x4D, 0x01];
 ///
 /// # Arguments
 /// * `proof_bytes` - The proof data (must be at least 4 bytes)
-/// * `_public_inputs` - Public inputs (ignored in mock, validated in Phase 2)
+/// * `_public_inputs` - Public inputs (ignored here, validated by the real verifier)
 pub fn mock_verify_proof(proof_bytes: &[u8], _public_inputs: &[[u8; 32]]) -> bool {
     if proof_bytes.len() < 4 {
         return false;

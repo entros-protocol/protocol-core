@@ -80,7 +80,7 @@ console.log("verifierAddr:", verifierAddr.toBase58());
 export const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
 /// Solana Instructions sysvar — read-only account that exposes the
 /// transaction's instruction list to on-chain programs. mint_anchor
-/// (master-list #146 Phase 3) reads it to verify a preceding
+/// reads it to verify a preceding
 /// Ed25519Program::verify mint receipt.
 export const INSTRUCTIONS_SYSVAR = new PublicKey(
   "Sysvar1nstructions1111111111111111111111111",
@@ -288,7 +288,7 @@ export type IdentityStateAcctWeb3js = {
   new_wallet: PublicKey;
 };
 
-//-----------== EncryptedBaseline (master-list #98)
+//-----------== EncryptedBaseline
 // Separate per-wallet PDA storing an opaque 96-byte AES-256-GCM ciphertext
 // of the user's SimHash + salt. Encryption happens off-chain in the SDK
 // under a key derived from a deterministic signMessage. The program never
@@ -341,7 +341,7 @@ export const protocolconfigAcctDecoder: FixedSizeDecoder<ProtocolConfigAcct> =
     ["bump", getU8Decoder()],
     ["verification_fee", getU64Decoder()],
     ["migration_fee", getU64Decoder()],
-    // master-list #146 Phase 3: validator_pubkey appended at offset 77
+    // validator_pubkey appended at offset 77
     // (Pubkey is 32 bytes, same encoding as Address). Pre-migration
     // accounts (77 bytes total) won't decode through this decoder —
     // post-migration accounts are 109 bytes.
