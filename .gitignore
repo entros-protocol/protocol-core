@@ -9,3 +9,7 @@ test-ledger
 justfile
 biome
 biome.json
+
+# Keypairs and secrets. Never commit these.
+*-keypair.json
+.keypair-backup-*/
