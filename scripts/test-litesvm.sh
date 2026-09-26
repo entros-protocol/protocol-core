@@ -7,6 +7,7 @@ readonly TEST_FILES=(
   "tests-litesvm-ts/compact-transaction.ts"
   "tests-litesvm-ts/encrypted-baseline-tests.ts"
   "tests-litesvm-ts/mint-receipt-tests.ts"
+  "tests-litesvm-ts/paired-receipt-tests.ts"
   "tests-litesvm-ts/reset-receipt-tests.ts"
   "tests-litesvm-ts/reset-tests.ts"
   "tests-litesvm-ts/test-coverage.ts"
