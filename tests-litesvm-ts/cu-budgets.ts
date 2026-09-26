@@ -16,6 +16,7 @@ export const maxComputeBudgets = {
   authorize_new_wallet: 30465,
   migrate_identity: 115196,
   reset_identity_state: 30493,
+  rebaseline_anchor: 19000,
   set_encrypted_baseline: 20000, // init_if_needed first-call ~17K, update ~10K
   //verifier
   create_challenge: 23000,

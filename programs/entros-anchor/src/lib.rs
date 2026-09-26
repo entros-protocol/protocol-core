@@ -131,6 +131,20 @@ const PC_LEN_WITH_PROJECTION_POLICY: usize = 113;
 const RECEIPT_V1_MESSAGE_LEN: usize = 72;
 const RECEIPT_V2_MESSAGE_LEN: usize = 103;
 const RECEIPT_V2_DOMAIN: &[u8; 28] = b"entros-validator-receipt-v2\0";
+/// A paired-session receipt: the v2 fields under their own domain, then the session's final
+/// digest and its assurance tier. The separate domain keeps any signed message from parsing
+/// under two layouts.
+const RECEIPT_V3_MESSAGE_LEN: usize = 136;
+const RECEIPT_V3_DOMAIN: &[u8; 28] = b"entros-validator-receipt-v3\0";
+/// 0 open, 1 bound, 2 attested.
+const MAX_ASSURANCE_TIER: u8 = 2;
+
+/// What a paired-session receipt binds beyond the v2 fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReceiptSession {
+    final_digest: [u8; 32],
+    assurance_tier: u8,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -247,8 +261,10 @@ fn isqrt(n: u64) -> u64 {
 /// any deployment from minting without a verified receipt.
 ///
 /// Version 2 binds the domain, purpose, projection version, wallet,
-/// commitment, and timestamp. Legacy mint receipts remain valid only while
-/// the active projection version is zero.
+/// commitment, and timestamp. Version 3 adds the paired session's final
+/// digest and assurance tier, and returns them for the session event.
+/// Legacy mint receipts remain valid only while the active projection
+/// version is zero.
 ///
 /// Solana verifies the signature before this instruction runs. This helper
 /// verifies that the signed payload matches the requested state transition.
@@ -260,7 +276,7 @@ fn verify_validator_receipt(
     expected_purpose: ReceiptPurpose,
     expected_projection_version: u16,
     now: i64,
-) -> Result<()> {
+) -> Result<Option<ReceiptSession>> {
     use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 
     // Fail closed: an all-zero `validator_pubkey` means ProtocolConfig has no
@@ -355,7 +371,10 @@ fn verify_validator_receipt(
         msg!("RECEIPT: Ed25519 ix offsets exceed data length");
         return Err(EntrosAnchorError::MalformedReceiptMessage.into());
     }
-    if message_size != RECEIPT_V1_MESSAGE_LEN && message_size != RECEIPT_V2_MESSAGE_LEN {
+    if message_size != RECEIPT_V1_MESSAGE_LEN
+        && message_size != RECEIPT_V2_MESSAGE_LEN
+        && message_size != RECEIPT_V3_MESSAGE_LEN
+    {
         msg!("RECEIPT: unsupported message size {}", message_size,);
         return Err(EntrosAnchorError::MalformedReceiptMessage.into());
     }
@@ -384,8 +403,8 @@ fn verify_receipt_payload(
     expected_purpose: ReceiptPurpose,
     expected_projection_version: u16,
     now: i64,
-) -> Result<()> {
-    let (receipt_wallet, receipt_commitment, validated_at) = match message.len() {
+) -> Result<Option<ReceiptSession>> {
+    let (receipt_wallet, receipt_commitment, validated_at, session) = match message.len() {
         RECEIPT_V1_MESSAGE_LEN => {
             require!(
                 expected_purpose == ReceiptPurpose::Mint && expected_projection_version == 0,
@@ -396,11 +415,18 @@ fn verify_receipt_payload(
                     .try_into()
                     .map_err(|_| error!(EntrosAnchorError::MalformedReceiptMessage))?,
             );
-            (&message[0..32], &message[32..64], validated_at)
+            (&message[0..32], &message[32..64], validated_at, None)
         }
-        RECEIPT_V2_MESSAGE_LEN => {
+        // Version 3 keeps every version 2 offset and appends the session tail.
+        RECEIPT_V2_MESSAGE_LEN | RECEIPT_V3_MESSAGE_LEN => {
+            let is_v3 = message.len() == RECEIPT_V3_MESSAGE_LEN;
+            let domain = if is_v3 {
+                RECEIPT_V3_DOMAIN
+            } else {
+                RECEIPT_V2_DOMAIN
+            };
             require!(
-                &message[0..28] == RECEIPT_V2_DOMAIN,
+                &message[0..28] == domain,
                 EntrosAnchorError::MalformedReceiptMessage
             );
             require!(
@@ -417,7 +443,22 @@ fn verify_receipt_payload(
                     .try_into()
                     .map_err(|_| error!(EntrosAnchorError::MalformedReceiptMessage))?,
             );
-            (&message[31..63], &message[63..95], validated_at)
+            let session = if is_v3 {
+                let assurance_tier = message[135];
+                require!(
+                    assurance_tier <= MAX_ASSURANCE_TIER,
+                    EntrosAnchorError::InvalidAssuranceTier
+                );
+                Some(ReceiptSession {
+                    final_digest: message[103..135]
+                        .try_into()
+                        .map_err(|_| error!(EntrosAnchorError::MalformedReceiptMessage))?,
+                    assurance_tier,
+                })
+            } else {
+                None
+            };
+            (&message[31..63], &message[63..95], validated_at, session)
         }
         _ => return Err(EntrosAnchorError::MalformedReceiptMessage.into()),
     };
@@ -436,7 +477,26 @@ fn verify_receipt_payload(
         EntrosAnchorError::ReceiptExpired
     );
 
-    Ok(())
+    Ok(session)
+}
+
+/// Records which paired session a receipt consumed. Fires only for a v3 receipt, so every
+/// existing event keeps its bytes.
+fn emit_receipt_session(
+    owner: Pubkey,
+    purpose: ReceiptPurpose,
+    projection_version: u16,
+    session: Option<ReceiptSession>,
+) {
+    if let Some(session) = session {
+        emit!(ReceiptSessionBound {
+            owner,
+            purpose: purpose as u8,
+            projection_version,
+            final_digest: session.final_digest,
+            assurance_tier: session.assurance_tier,
+        });
+    }
 }
 
 /// Mint account space for Token-2022 with NonTransferable extension.
@@ -991,7 +1051,7 @@ pub mod entros_anchor {
         // (an unconfigured or pre-migration ProtocolConfig). No mint path
         // proceeds without a verified validator receipt.
         let now = Clock::get()?.unix_timestamp;
-        verify_validator_receipt(
+        let receipt_session = verify_validator_receipt(
             &ctx.accounts.instructions_sysvar,
             &validator_pubkey,
             &ctx.accounts.user.key(),
@@ -1021,6 +1081,12 @@ pub mod entros_anchor {
             mint: identity.mint,
             commitment: initial_commitment,
         });
+        emit_receipt_session(
+            identity.owner,
+            ReceiptPurpose::Mint,
+            projection_policy.current,
+            receipt_session,
+        );
 
         Ok(())
     }
@@ -1489,7 +1555,7 @@ pub mod entros_anchor {
         };
         validate_requested_projection(projection_version, projection_policy)?;
 
-        if projection_policy.current > 0 {
+        let receipt_session = if projection_policy.current > 0 {
             require!(
                 receipt_accounts.len() == 1,
                 EntrosAnchorError::InvalidResetReceiptAccounts
@@ -1508,13 +1574,14 @@ pub mod entros_anchor {
                 ReceiptPurpose::Reset,
                 projection_policy.current,
                 now,
-            )?;
+            )?
         } else {
             require!(
                 receipt_accounts.is_empty(),
                 EntrosAnchorError::InvalidResetReceiptAccounts
             );
-        }
+            None
+        };
 
         identity.current_commitment = new_commitment;
         identity.verification_count = 0;
@@ -1548,6 +1615,12 @@ pub mod entros_anchor {
             mint: identity.mint,
             commitment: new_commitment,
         });
+        emit_receipt_session(
+            identity.owner,
+            ReceiptPurpose::Reset,
+            projection_policy.current,
+            receipt_session,
+        );
 
         Ok(())
     }
@@ -1701,7 +1774,7 @@ pub mod entros_anchor {
             EntrosAnchorError::RebaselineCooldownActive
         );
 
-        verify_validator_receipt(
+        let receipt_session = verify_validator_receipt(
             &ctx.accounts.instructions_sysvar,
             &validator_pubkey,
             &ctx.accounts.authority.key(),
@@ -1742,6 +1815,12 @@ pub mod entros_anchor {
             commitment: new_commitment,
             projection_version: projection_policy.current,
         });
+        emit_receipt_session(
+            identity.owner,
+            ReceiptPurpose::Rebaseline,
+            projection_policy.current,
+            receipt_session,
+        );
 
         Ok(())
     }
@@ -2201,6 +2280,17 @@ pub struct AnchorRebaselined {
     pub projection_version: u16,
 }
 
+/// The paired session whose final digest a validator receipt consumed, and the assurance tier
+/// the validator signed.
+#[event]
+pub struct ReceiptSessionBound {
+    pub owner: Pubkey,
+    pub purpose: u8,
+    pub projection_version: u16,
+    pub final_digest: [u8; 32],
+    pub assurance_tier: u8,
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2214,9 +2304,9 @@ mod tests {
 
     use super::{
         read_projection_policy, record_verification, validate_identity_projection,
-        validate_requested_projection, verify_receipt_payload, ProjectionPolicy, ReceiptPurpose,
-        BIN_SIZE_SECS, MAX_RECEIPT_AGE_SECS, RECEIPT_V1_MESSAGE_LEN, RECEIPT_V2_DOMAIN,
-        RECEIPT_V2_MESSAGE_LEN,
+        validate_requested_projection, verify_receipt_payload, EntrosAnchorError, ProjectionPolicy,
+        ReceiptPurpose, ReceiptSession, BIN_SIZE_SECS, MAX_RECEIPT_AGE_SECS,
+        RECEIPT_V1_MESSAGE_LEN, RECEIPT_V2_DOMAIN, RECEIPT_V2_MESSAGE_LEN,
     };
     use anchor_lang::prelude::Pubkey;
 
@@ -2445,5 +2535,184 @@ mod tests {
         record_verification(&mut ring, T0 - BIN_SIZE_SECS * 2);
         assert_eq!(ring[0], T0);
         assert_eq!(ring[1], 0);
+    }
+
+    /// The shared paired-round vectors, generated independently of this program.
+    const VECTORS: &str =
+        include_str!("../../../tests-litesvm-ts/fixtures/paired-round-vectors.json");
+
+    fn vector_bytes(value: &serde_json::Value) -> Vec<u8> {
+        let text = value.as_str().expect("hex string");
+        (0..text.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&text[index..index + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    #[test]
+    fn every_v3_receipt_vector_verifies_and_yields_its_session() {
+        let vectors: serde_json::Value = serde_json::from_str(VECTORS).expect("vectors parse");
+        let receipts = &vectors["receipts"];
+        let wallet = Pubkey::new_from_array(
+            vector_bytes(&receipts["walletHex"])
+                .try_into()
+                .expect("32 bytes"),
+        );
+        let commitment: [u8; 32] = vector_bytes(&receipts["commitmentHex"])
+            .try_into()
+            .expect("32 bytes");
+        let final_digest: [u8; 32] = vector_bytes(&receipts["finalDigestHex"])
+            .try_into()
+            .expect("32 bytes");
+        let validated_at = receipts["validatedAt"].as_i64().expect("validated at");
+        let projection = receipts["projectionVersion"].as_u64().expect("projection") as u16;
+
+        for case in receipts["v3"].as_array().expect("v3 cases") {
+            let purpose = match case["purpose"].as_u64() {
+                Some(1) => ReceiptPurpose::Mint,
+                Some(2) => ReceiptPurpose::Rebaseline,
+                Some(3) => ReceiptPurpose::Reset,
+                other => panic!("unknown receipt purpose {other:?}"),
+            };
+            let tier = case["assuranceTier"].as_u64().expect("tier") as u8;
+            let message = vector_bytes(&case["messageHex"]);
+            assert_eq!(
+                verify_receipt_payload(
+                    &message,
+                    &wallet,
+                    &commitment,
+                    purpose,
+                    projection,
+                    validated_at,
+                )
+                .expect("v3 receipt verifies"),
+                Some(ReceiptSession {
+                    final_digest,
+                    assurance_tier: tier,
+                })
+            );
+        }
+
+        let v2 = vector_bytes(&receipts["v2"]["messageHex"]);
+        assert_eq!(
+            verify_receipt_payload(
+                &v2,
+                &wallet,
+                &commitment,
+                ReceiptPurpose::Mint,
+                projection,
+                validated_at,
+            )
+            .expect("v2 receipt verifies"),
+            None
+        );
+
+        let error_code = |message: &[u8]| match verify_receipt_payload(
+            message,
+            &wallet,
+            &commitment,
+            ReceiptPurpose::Mint,
+            projection,
+            validated_at,
+        ) {
+            Err(anchor_lang::error::Error::AnchorError(error)) => error.error_code_number,
+            other => panic!("expected an Anchor error, got {other:?}"),
+        };
+        let malformed: u32 = EntrosAnchorError::MalformedReceiptMessage.into();
+        let tier: u32 = EntrosAnchorError::InvalidAssuranceTier.into();
+        for case in receipts["invalid"].as_array().expect("invalid cases") {
+            let name = case["name"].as_str().expect("name");
+            let expected = if name.contains("tier") {
+                tier
+            } else {
+                malformed
+            };
+            assert_eq!(
+                error_code(&vector_bytes(&case["messageHex"])),
+                expected,
+                "{name}"
+            );
+        }
+        let mint = v3_mint_tier_two(receipts);
+        assert_eq!(error_code(&mint[..135]), malformed);
+        assert_eq!(error_code(&[mint.as_slice(), &[0]].concat()), malformed);
+    }
+
+    fn v3_mint_tier_two(receipts: &serde_json::Value) -> Vec<u8> {
+        let case = receipts["v3"]
+            .as_array()
+            .expect("v3 cases")
+            .iter()
+            .find(|case| case["purpose"] == 1 && case["assuranceTier"] == 2)
+            .expect("a tier 2 mint vector");
+        vector_bytes(&case["messageHex"])
+    }
+
+    #[test]
+    fn a_v3_receipt_still_binds_purpose_projection_wallet_and_age() {
+        let vectors: serde_json::Value = serde_json::from_str(VECTORS).expect("vectors parse");
+        let receipts = &vectors["receipts"];
+        let wallet = Pubkey::new_from_array(
+            vector_bytes(&receipts["walletHex"])
+                .try_into()
+                .expect("32 bytes"),
+        );
+        let commitment: [u8; 32] = vector_bytes(&receipts["commitmentHex"])
+            .try_into()
+            .expect("32 bytes");
+        let validated_at = receipts["validatedAt"].as_i64().expect("validated at");
+        let mint = v3_mint_tier_two(receipts);
+        let check = |purpose, projection, wallet: &Pubkey, commitment: &[u8; 32], now| {
+            verify_receipt_payload(&mint, wallet, commitment, purpose, projection, now).is_ok()
+        };
+        assert!(check(
+            ReceiptPurpose::Mint,
+            1,
+            &wallet,
+            &commitment,
+            validated_at
+        ));
+        assert!(!check(
+            ReceiptPurpose::Reset,
+            1,
+            &wallet,
+            &commitment,
+            validated_at
+        ));
+        assert!(!check(
+            ReceiptPurpose::Mint,
+            2,
+            &wallet,
+            &commitment,
+            validated_at
+        ));
+        assert!(!check(
+            ReceiptPurpose::Mint,
+            1,
+            &Pubkey::new_unique(),
+            &commitment,
+            validated_at
+        ));
+        assert!(!check(
+            ReceiptPurpose::Mint,
+            1,
+            &wallet,
+            &[0u8; 32],
+            validated_at
+        ));
+        assert!(!check(
+            ReceiptPurpose::Mint,
+            1,
+            &wallet,
+            &commitment,
+            validated_at + MAX_RECEIPT_AGE_SECS + 1
+        ));
+        assert!(!check(
+            ReceiptPurpose::Mint,
+            1,
+            &wallet,
+            &commitment,
+            validated_at - 1
+        ));
     }
 }
