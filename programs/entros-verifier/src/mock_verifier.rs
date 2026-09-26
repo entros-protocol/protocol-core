@@ -1,7 +1,8 @@
 // Mock Groth16 verification.
 //
-// Accepts any proof where the first 4 bytes equal [0x49, 0x41, 0x4D, 0x01] ("Entros\x01").
-// This magic prefix allows tests to construct valid/invalid proofs trivially.
+// Accepts any proof whose first 4 bytes equal [0x49, 0x41, 0x4D, 0x01]. The value
+// is an arbitrary fixed prefix that lets tests construct valid and invalid proofs
+// trivially.
 //
 // The real path replaces this with groth16_solana::groth16::Groth16Verifier
 // and genuine circuit verification keys.

@@ -5,10 +5,9 @@
  * Run from protocol-core directory:
  *   npx tsx scripts/set-validator-pubkey.ts
  *
- * The validator pubkey is read from the local validator-signing keypair
- * file at /IAM/.config/validator-signing-devnet.json (gitignored). That
- * key was generated 2026-04-28 and is the same pubkey the validator
- * service uses to sign mint receipts.
+ * The validator pubkey is read from the validator signing keypair in the
+ * protocol's key store (override with VALIDATOR_SIGNING_KEYPAIR_PATH). It
+ * must be the same key the validator service uses to sign mint receipts.
  */
 
 import * as anchor from "@anchor-lang/core";
