@@ -13,6 +13,8 @@ The following CU values are ceilings (maximum expected values) used by the regre
 | authorize_new_wallet | @authorize_new_wallet@ | @authorize_new_walletH@ | Included operations: add new signer in IdentityPDA, approve token delegate |
 | migrate_identity | @migrate_identity@ | @migrate_identityH@ | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
 | reset_identity_state | @reset_identity_state@ | @reset_identity_stateH@ | User-initiated baseline recovery; writes new commitment, zeroes verification history, charges protocol fee, 7-day cooldown enforced. May realloc legacy accounts |
+| rebaseline_anchor | @rebaseline_anchor@ | @rebaseline_anchorH@ | Moves an identity to the current projection under a validator receipt; 7-day cooldown |
+| set_encrypted_baseline | @set_encrypted_baseline@ | @set_encrypted_baselineH@ | Writes the encrypted baseline blob; creates the account on first call |
 
 ## entros-registry
 
@@ -26,6 +28,7 @@ The following CU values are ceilings (maximum expected values) used by the regre
 | withdraw_treasury | @withdraw_treasury@ | @withdraw_treasuryH@ | SOL transfer from treasury |
 | migrate_admin | @migrate_admin@ | @migrate_adminH@ | Simple field update + ProtocolConfig realloc + raw-byte admin write |
 | set_validator_pubkey | @set_validator_pubkey@ | @set_validator_pubkeyH@ | Admin-only; writes validator signing pubkey to ProtocolConfig (offset 77) used by mint_anchor receipt verification. Realloc 77→109 bytes on first call against legacy account |
+| set_projection_versions | @set_projection_versions@ | @set_projection_versionsH@ | Admin-only; sets the current and minimum projection versions, may realloc |
 
 ## entros-verifier
 
@@ -33,6 +36,7 @@ The following CU values are ceilings (maximum expected values) used by the regre
 |-------------|-------------|----------|-------|
 | create_challenge | @create_challenge@ | @create_challengeH@ | Nonce validation + PDA creation |
 | verify_proof | @verify_proof@ | @verify_proofH@ | Groth16 verification (heaviest instruction) |
+| verify_proof_compact | @verify_proof_compact@ | @verify_proof_compactH@ | Groth16 verification with compact public inputs |
 | close_challenge | @close_challenge@ | @close_challengeH@ | Rent recovery, minimal logic |
 | close_verification_result | @close_verification_result@ | @close_verification_resultH@ | Rent recovery, minimal logic |
 

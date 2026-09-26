@@ -82,4 +82,6 @@ pub enum EntrosAnchorError {
     UnsupportedProofGeneration,
     #[msg("Invalid proof request context")]
     InvalidRequestContext,
+    #[msg("Receipt assurance tier is not a known tier")]
+    InvalidAssuranceTier,
 }
