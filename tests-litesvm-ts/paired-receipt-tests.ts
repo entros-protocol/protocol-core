@@ -47,10 +47,11 @@ import {
   svm,
 } from "./litesvm-utils.ts";
 
-const VECTORS_SHA256 =
+const cueVectors=process.argv.includes("--cue-vectors");
+const VECTORS_SHA256 = cueVectors ? "4abee5871ee9f64d0d9abae5c388cab49bddafc43c10d370b31312d9ea58c5a9" :
   "cb88f752aed0e29a0f2321e85a2ff3006e3c1f65a933d2c729c069574445e63d";
 const vectorsText = readFileSync(
-  resolve(process.cwd(), "tests-litesvm-ts/fixtures/paired-round-vectors.json"),
+  resolve(process.cwd(), cueVectors ? "tests-litesvm-ts/fixtures/paired-round-v2-vectors.json" : "tests-litesvm-ts/fixtures/paired-round-vectors.json"),
   "utf8",
 );
 const vectors = JSON.parse(vectorsText);
