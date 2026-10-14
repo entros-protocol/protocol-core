@@ -69,8 +69,8 @@ impl VerificationResult {
         + 2   // threshold
         + 2; // min_distance
 
-    /// Legacy layout size (pre-binding patch). Accounts created before the
-    /// 2026-04-20 upgrade have this size and are rejected by update_anchor
-    /// via a length check that requires LEN (the new, larger size).
+    /// Legacy layout size, without the commitment_new, commitment_prev,
+    /// threshold and min_distance fields. Accounts of this size are rejected by
+    /// update_anchor via a length check that requires LEN.
     pub const LEN_V1: usize = 114;
 }

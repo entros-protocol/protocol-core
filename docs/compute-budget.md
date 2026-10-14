@@ -2,9 +2,9 @@
 
 Default limit is 200,000 Compute Units (CU) per instruction.
 
-The following CU values are ceilings (maximum expected values) used by the regression suite. Anything ≤ the listed value passes, anything > the listed value fails. Such ceilings are measured by running each of the LiteSVM tests 10 times and picking the maximum measured CU for each of our Solana write functions. Last verified: 2026-05-13.
+The following CU values are ceilings (maximum expected values) used by the regression suite. Anything ≤ the listed value passes, anything > the listed value fails. Such ceilings are measured by running each of the LiteSVM tests 10 times and picking the maximum measured CU for each of our Solana write functions.
 
-**2026-05-13 update.** Enabling the `init-if-needed` feature on `anchor-lang` (required by the new `set_encrypted_baseline` instruction on entros-anchor) adds a small CU drift to all instructions across the workspace (~1-3%). The new ceilings below reflect the post-feature measurements. `set_encrypted_baseline` added to entros-anchor.
+The `init-if-needed` feature on `anchor-lang`, required by the `set_encrypted_baseline` instruction on entros-anchor, adds about 1-3% CU to every instruction in the workspace. The ceilings below include it.
 
 ## entros-anchor
 
@@ -15,7 +15,7 @@ The following CU values are ceilings (maximum expected values) used by the regre
 | authorize_new_wallet | 27.48K | 172.51K | Included operations: add new signer in IdentityPDA, approve token delegate |
 | migrate_identity | 115.2K | 84.8K | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
 | reset_identity_state | 30.49K | 169.51K | User-initiated baseline recovery; writes new commitment, zeroes verification history, charges protocol fee, 7-day cooldown enforced. May realloc legacy accounts |
-| set_encrypted_baseline | 16.91K (init) / 12.42K (update) | 183.09K / 187.58K | Master-list #98. `init_if_needed` creates the EncryptedBaseline PDA on first call (~17K CU), update overwrites existing blob (~12K CU). Blob is opaque 96-byte AES-256-GCM ciphertext encrypted off-chain. Pre-mint guard enforces existing IdentityState via `data_len() > 0` |
+| set_encrypted_baseline | 16.91K (init) / 12.42K (update) | 183.09K / 187.58K | `init_if_needed` creates the EncryptedBaseline PDA on first call (~17K CU), update overwrites existing blob (~12K CU). Blob is opaque 96-byte AES-256-GCM ciphertext encrypted off-chain. Pre-mint guard enforces existing IdentityState via `data_len() > 0` |
 
 ## entros-registry
 

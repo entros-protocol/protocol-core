@@ -28,8 +28,7 @@ security_txt! {
     source_code: "https://github.com/entros-protocol/protocol-core"
 }
 
-/// Default challenge expiry in seconds (5 minutes).
-/// In production, this is read from ProtocolConfig via CPI.
+/// Challenge expiry in seconds (5 minutes).
 const DEFAULT_CHALLENGE_EXPIRY: i64 = 300;
 
 /// Highest Hamming threshold input accepted by this program.

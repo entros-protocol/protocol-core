@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { struct, u8, u32 } from "@solana/buffer-layout";
 import { publicKey, u64 } from "@solana/buffer-layout-utils";
 import { AccountLayout, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -1054,11 +1055,12 @@ export const deployProgram = (
   //solana program dump progAddr pyth.so --url mainnet-beta
   svm.addProgramFromFile(programId, programPath);
 };
-deployProgram("target/deploy/entros_anchor.so", anchorAddr);
+const programDirectory = process.env.ENTROS_LITESVM_PROGRAM_DIR ?? "target/deploy";
+deployProgram(resolve(programDirectory, "entros_anchor.so"), anchorAddr);
 acctExists(anchorAddr);
-deployProgram("target/deploy/entros_registry.so", registryAddr);
+deployProgram(resolve(programDirectory, "entros_registry.so"), registryAddr);
 acctExists(registryAddr);
-deployProgram("target/deploy/entros_verifier.so", verifierAddr);
+deployProgram(resolve(programDirectory, "entros_verifier.so"), verifierAddr);
 acctExists(verifierAddr);
 console.log("program deployment is successful");
 
