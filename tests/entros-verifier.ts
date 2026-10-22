@@ -23,25 +23,11 @@ describe("entros-verifier", () => {
     minDistance: number,
   ): Promise<void> {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
-
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
 
     try {
       await program.methods
@@ -55,7 +41,6 @@ describe("entros-verifier", () => {
         )
         .accountsStrict({
           verifier: provider.wallet.publicKey,
-          challenge: challengePda,
           verificationResult: verificationPda,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
@@ -65,8 +50,9 @@ describe("entros-verifier", () => {
       expect(String(error)).to.match(/InvalidPublicInputs|6004/);
     }
 
-    const challenge = await program.account.challenge.fetch(challengePda);
-    expect(challenge.used).to.be.false;
+    const result =
+      await program.account.verificationResult.fetchNullable(verificationPda);
+    expect(result).to.be.null;
   }
 
   it("creates a challenge", async () => {
@@ -98,25 +84,11 @@ describe("entros-verifier", () => {
 
   it("verifies a valid Groth16 proof", async () => {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
-
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
 
     const proofBytes = Buffer.from(fixture.proof_bytes);
     const publicInputs: number[][] = fixture.public_inputs;
@@ -125,7 +97,6 @@ describe("entros-verifier", () => {
       .verifyProof(proofBytes, publicInputs, nonce)
       .accountsStrict({
         verifier: provider.wallet.publicKey,
-        challenge: challengePda,
         verificationResult: verificationPda,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
@@ -137,32 +108,15 @@ describe("entros-verifier", () => {
     expect(result.verifier.toBase58()).to.equal(
       provider.wallet.publicKey.toBase58(),
     );
-
-    const challenge = await program.account.challenge.fetch(challengePda);
-    expect(challenge.used).to.be.true;
   });
 
   it("verifies the same proof through fixed-size arguments", async () => {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
-
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
 
     await program.methods
       .verifyProofCompact(
@@ -175,7 +129,6 @@ describe("entros-verifier", () => {
       )
       .accountsStrict({
         verifier: provider.wallet.publicKey,
-        challenge: challengePda,
         verificationResult: verificationPda,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
@@ -193,19 +146,9 @@ describe("entros-verifier", () => {
   it("stores equivalent legacy and compact proof results", async () => {
     const legacyNonce = generateNonce();
     const compactNonce = generateNonce();
-    const [legacyChallengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      legacyNonce,
-      entrosVerifierProgId,
-    );
     const [legacyResultPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       legacyNonce,
-      entrosVerifierProgId,
-    );
-    const [compactChallengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      compactNonce,
       entrosVerifierProgId,
     );
     const [compactResultPda] = deriveVerificationPda(
@@ -215,14 +158,6 @@ describe("entros-verifier", () => {
     );
 
     await program.methods
-      .createChallenge(legacyNonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: legacyChallengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
-    await program.methods
       .verifyProof(
         Buffer.from(fixture.proof_bytes),
         fixture.public_inputs,
@@ -230,20 +165,11 @@ describe("entros-verifier", () => {
       )
       .accountsStrict({
         verifier: provider.wallet.publicKey,
-        challenge: legacyChallengePda,
         verificationResult: legacyResultPda,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
       .rpc();
 
-    await program.methods
-      .createChallenge(compactNonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: compactChallengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
     await program.methods
       .verifyProofCompact(
         compactNonce,
@@ -255,7 +181,6 @@ describe("entros-verifier", () => {
       )
       .accountsStrict({
         verifier: provider.wallet.publicKey,
-        challenge: compactChallengePda,
         verificationResult: compactResultPda,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
@@ -284,25 +209,11 @@ describe("entros-verifier", () => {
 
   it("rejects tampered proof (transaction reverts)", async () => {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
-
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
 
     // Tamper with proof bytes (flip some bytes)
     const tamperedProof = Buffer.from(fixture.proof_bytes);
@@ -314,7 +225,6 @@ describe("entros-verifier", () => {
         .verifyProof(tamperedProof, fixture.public_inputs, nonce)
         .accountsStrict({
           verifier: provider.wallet.publicKey,
-          challenge: challengePda,
           verificationResult: verificationPda,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
@@ -324,32 +234,18 @@ describe("entros-verifier", () => {
       expect(err).to.exist;
     }
 
-    // Challenge nonce must NOT be consumed (transaction reverted atomically)
-    const challenge = await program.account.challenge.fetch(challengePda);
-    expect(challenge.used).to.be.false;
+    const result =
+      await program.account.verificationResult.fetchNullable(verificationPda);
+    expect(result).to.be.null;
   });
 
-  it("rejects already-used challenge", async () => {
+  it("rejects duplicate verification result nonce", async () => {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
-
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
 
     const proofBytes = Buffer.from(fixture.proof_bytes);
 
@@ -357,7 +253,6 @@ describe("entros-verifier", () => {
       .verifyProof(proofBytes, fixture.public_inputs, nonce)
       .accountsStrict({
         verifier: provider.wallet.publicKey,
-        challenge: challengePda,
         verificationResult: verificationPda,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
@@ -368,7 +263,6 @@ describe("entros-verifier", () => {
         .verifyProof(proofBytes, fixture.public_inputs, nonce)
         .accountsStrict({
           verifier: provider.wallet.publicKey,
-          challenge: challengePda,
           verificationResult: verificationPda,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
@@ -383,32 +277,17 @@ describe("entros-verifier", () => {
 
   it("stores commitment_new / commitment_prev / threshold / min_distance on a valid proof", async () => {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
 
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
-
     const proofBytes = Buffer.from(fixture.proof_bytes);
     await program.methods
       .verifyProof(proofBytes, fixture.public_inputs, nonce)
       .accountsStrict({
         verifier: provider.wallet.publicKey,
-        challenge: challengePda,
         verificationResult: verificationPda,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
@@ -429,25 +308,11 @@ describe("entros-verifier", () => {
 
   it("rejects public_inputs with threshold field exceeding u16 (high bytes set)", async () => {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
-
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
 
     // Craft bad public_inputs: threshold with a high byte set so the u16
     // decode would be ambiguous without the zero-check in the verifier.
@@ -464,7 +329,6 @@ describe("entros-verifier", () => {
         .verifyProof(Buffer.from(fixture.proof_bytes), badPublicInputs, nonce)
         .accountsStrict({
           verifier: provider.wallet.publicKey,
-          challenge: challengePda,
           verificationResult: verificationPda,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
@@ -478,25 +342,11 @@ describe("entros-verifier", () => {
 
   it("rejects public_inputs with zero commitment_new", async () => {
     const nonce = generateNonce();
-    const [challengePda] = deriveChallengePda(
-      provider.wallet.publicKey,
-      nonce,
-      entrosVerifierProgId,
-    );
     const [verificationPda] = deriveVerificationPda(
       provider.wallet.publicKey,
       nonce,
       entrosVerifierProgId,
     );
-
-    await program.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: provider.wallet.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .rpc();
 
     const badPublicInputs: number[][] = [
       new Array(32).fill(0),
@@ -510,7 +360,6 @@ describe("entros-verifier", () => {
         .verifyProof(Buffer.from(fixture.proof_bytes), badPublicInputs, nonce)
         .accountsStrict({
           verifier: provider.wallet.publicKey,
-          challenge: challengePda,
           verificationResult: verificationPda,
           systemProgram: anchor.web3.SystemProgram.programId,
         })

@@ -15,6 +15,7 @@ import {
   buildMintReceiptIx,
   buildRebaselineReceiptIx,
   buildResetReceiptIx,
+  buildUpdateReceipt,
   deriveIdentityPda,
   deriveMintPda,
   fundAccount,
@@ -262,17 +263,21 @@ describe("entros-anchor", () => {
     });
 
     const newCommitment = Buffer.from(fixture.public_inputs[0]);
+    const rec = buildUpdateReceipt(user.publicKey, newCommitment);
 
     await program.methods
-      .updateAnchor(Array.from(newCommitment), boot.nonce)
+      .updateAnchor(Array.from(newCommitment), rec.args)
       .accountsStrict({
         authority: user.publicKey,
         identityState: boot.identityPda,
         verificationResult: boot.verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: entrosVerifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([rec.ix])
       .signers([user])
       .rpc();
 
@@ -302,16 +307,20 @@ describe("entros-anchor", () => {
       mintAuthorityPda,
     });
 
+    const rec = buildUpdateReceipt(user.publicKey, fixture.public_inputs[0]);
     await program.methods
-      .updateAnchorCompact(boot.nonce)
+      .updateAnchorCompact(rec.args)
       .accountsStrict({
         authority: user.publicKey,
         identityState: boot.identityPda,
         verificationResult: boot.verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: entrosVerifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([rec.ix])
       .signers([user])
       .rpc();
 
@@ -352,30 +361,44 @@ describe("entros-anchor", () => {
     });
 
     const beforeLegacy = await provider.connection.getBalance(treasuryPda);
+    const legacyRec = buildUpdateReceipt(
+      legacyUser.publicKey,
+      fixture.public_inputs[0],
+    );
     await program.methods
-      .updateAnchor(fixture.public_inputs[0], legacyBoot.nonce)
+      .updateAnchor(fixture.public_inputs[0], legacyRec.args)
       .accountsStrict({
         authority: legacyUser.publicKey,
         identityState: legacyBoot.identityPda,
         verificationResult: legacyBoot.verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: entrosVerifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([legacyRec.ix])
       .signers([legacyUser])
       .rpc();
     const afterLegacy = await provider.connection.getBalance(treasuryPda);
 
+    const compactRec = buildUpdateReceipt(
+      compactUser.publicKey,
+      fixture.public_inputs[0],
+    );
     await program.methods
-      .updateAnchorCompact(compactBoot.nonce)
+      .updateAnchorCompact(compactRec.args)
       .accountsStrict({
         authority: compactUser.publicKey,
         identityState: compactBoot.identityPda,
         verificationResult: compactBoot.verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: entrosVerifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([compactRec.ix])
       .signers([compactUser])
       .rpc();
     const afterCompact = await provider.connection.getBalance(treasuryPda);
@@ -416,18 +439,22 @@ describe("entros-anchor", () => {
     const attacker = anchor.web3.Keypair.generate();
     await fundAccount(provider, attacker.publicKey, 2_000_000_000);
     const fakeCommitment = Buffer.from(fixture.public_inputs[0]);
+    const rec = buildUpdateReceipt(attacker.publicKey, fakeCommitment);
 
     try {
       await program.methods
-        .updateAnchor(Array.from(fakeCommitment), boot.nonce)
+        .updateAnchor(Array.from(fakeCommitment), rec.args)
         .accountsStrict({
           authority: attacker.publicKey,
           identityState: boot.identityPda,
           verificationResult: boot.verificationPda,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          verifierProgram: entrosVerifier.programId,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
+        .preInstructions([rec.ix])
         .signers([attacker])
         .rpc();
       expect.fail("Should have thrown: unauthorized update");
@@ -463,11 +490,12 @@ describe("entros-anchor", () => {
       });
 
       const treasuryBefore = await provider.connection.getBalance(treasuryPda);
+      const rec = buildUpdateReceipt(user.publicKey, fixture.public_inputs[0]);
 
       await program.methods
         .updateAnchor(
           Array.from(Buffer.from(fixture.public_inputs[0])),
-          boot.nonce,
+          rec.args,
         )
         .accountsStrict({
           authority: user.publicKey,
@@ -475,8 +503,11 @@ describe("entros-anchor", () => {
           verificationResult: boot.verificationPda,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          verifierProgram: entrosVerifier.programId,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
+        .preInstructions([rec.ix])
         .signers([user])
         .rpc();
 
@@ -513,34 +544,40 @@ describe("entros-anchor", () => {
     });
 
     const newCommitment = Array.from(Buffer.from(fixture.public_inputs[0]));
+    const rec = buildUpdateReceipt(user.publicKey, newCommitment);
 
-    // First update consumes the VR successfully
+    // First update consumes and closes the VR successfully
     await program.methods
-      .updateAnchor(newCommitment, boot.nonce)
+      .updateAnchor(newCommitment, rec.args)
       .accountsStrict({
         authority: user.publicKey,
         identityState: boot.identityPda,
         verificationResult: boot.verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: entrosVerifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([rec.ix])
       .signers([user])
       .rpc();
 
-    // Second attempt with the SAME VR: commitment_prev still equals fixture[1]
-    // but identity.current_commitment has rotated to fixture[0]. Reject.
+    // Second attempt with the SAME VR: VR has been closed atomically.
     try {
       await program.methods
-        .updateAnchor(newCommitment, boot.nonce)
+        .updateAnchor(newCommitment, rec.args)
         .accountsStrict({
           authority: user.publicKey,
           identityState: boot.identityPda,
           verificationResult: boot.verificationPda,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          verifierProgram: entrosVerifier.programId,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
+        .preInstructions([rec.ix])
         .signers([user])
         .rpc();
       expect.fail(
@@ -548,9 +585,9 @@ describe("entros-anchor", () => {
       );
     } catch (err: any) {
       expect(err).to.exist;
-      // The VerificationResult was already consumed, so its commitment_prev no
-      // longer matches the identity's head.
-      expect(String(err)).to.match(/PrevCommitmentMismatch|6011/);
+      expect(String(err)).to.match(
+        /VerificationResultWrongOwner|PrevCommitmentMismatch|6009|6011/,
+      );
     }
   });
 
@@ -571,18 +608,22 @@ describe("entros-anchor", () => {
 
     // Submit a DIFFERENT new_commitment than what the proof attested to
     const maliciousCommitment = Buffer.alloc(32, 0xaa);
+    const rec = buildUpdateReceipt(user.publicKey, maliciousCommitment);
 
     try {
       await program.methods
-        .updateAnchor(Array.from(maliciousCommitment), boot.nonce)
+        .updateAnchor(Array.from(maliciousCommitment), rec.args)
         .accountsStrict({
           authority: user.publicKey,
           identityState: boot.identityPda,
           verificationResult: boot.verificationPda,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          verifierProgram: entrosVerifier.programId,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
+        .preInstructions([rec.ix])
         .signers([user])
         .rpc();
       expect.fail("Should have thrown: CommitmentMismatch");
@@ -648,11 +689,12 @@ describe("entros-anchor", () => {
     // B tries to update own identity using A's VerificationResult.
     // The VR PDA is seeded on A's pubkey + nonce; B passing A's VR won't match
     // B's seeds derivation, causing Anchor to reject with ConstraintSeeds.
+    const recB = buildUpdateReceipt(userB.publicKey, fixture.public_inputs[0]);
     try {
       await program.methods
         .updateAnchor(
           Array.from(Buffer.from(fixture.public_inputs[0])),
-          bootA.nonce,
+          recB.args,
         )
         .accountsStrict({
           authority: userB.publicKey,
@@ -660,8 +702,11 @@ describe("entros-anchor", () => {
           verificationResult: bootA.verificationPda,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          verifierProgram: entrosVerifier.programId,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
+        .preInstructions([recB.ix])
         .signers([userB])
         .rpc();
       expect.fail("Should have thrown: one wallet cannot use another wallet's verification result");
@@ -743,10 +788,14 @@ describe("entros-anchor", () => {
     migrationIdentityPda = boot.identityPda;
     migrationMintPda = boot.mintPda;
 
+    const migRec = buildUpdateReceipt(
+      migrationUser.publicKey,
+      fixture.public_inputs[0],
+    );
     await program.methods
       .updateAnchor(
         Array.from(Buffer.from(fixture.public_inputs[0])),
-        boot.nonce,
+        migRec.args,
       )
       .accountsStrict({
         authority: migrationUser.publicKey,
@@ -754,8 +803,11 @@ describe("entros-anchor", () => {
         verificationResult: boot.verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: entrosVerifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([migRec.ix])
       .signers([migrationUser])
       .rpc();
 
@@ -780,11 +832,15 @@ describe("entros-anchor", () => {
       })
       .rpc();
 
+    const staleRec = buildUpdateReceipt(
+      staleUser.publicKey,
+      fixture.public_inputs[0],
+    );
     try {
       await program.methods
         .updateAnchor(
           Array.from(Buffer.from(fixture.public_inputs[0])),
-          staleBoot.nonce,
+          staleRec.args,
         )
         .accountsStrict({
           authority: staleUser.publicKey,
@@ -792,8 +848,11 @@ describe("entros-anchor", () => {
           verificationResult: staleBoot.verificationPda,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          verifierProgram: entrosVerifier.programId,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
+        .preInstructions([staleRec.ix])
         .signers([staleUser])
         .rpc();
       expect.fail("a version-zero identity must rebaseline before updating");
@@ -996,23 +1055,22 @@ describe("entros-anchor", () => {
       [Buffer.from("verification"), user.publicKey.toBuffer(), Buffer.from(nonce1)],
       entrosVerifier.programId
     );
-    const [challengePda1] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("challenge"), user.publicKey.toBuffer(), Buffer.from(nonce1)],
-      entrosVerifier.programId
-    );
-    await entrosVerifier.methods.createChallenge(nonce1).accountsStrict({ challenger: user.publicKey, challenge: challengePda1, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
-    await entrosVerifier.methods.verifyProof(Buffer.from(fixture.proof_bytes), fixture.public_inputs, nonce1).accountsStrict({ verifier: user.publicKey, challenge: challengePda1, verificationResult: verificationPda1, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
+    await entrosVerifier.methods.verifyProof(Buffer.from(fixture.proof_bytes), fixture.public_inputs, nonce1).accountsStrict({ verifier: user.publicKey, verificationResult: verificationPda1, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
 
+    const rec1 = buildUpdateReceipt(user.publicKey, newCommitment1, 1);
     await program.methods
-      .updateAnchor(Array.from(newCommitment1), nonce1)
+      .updateAnchor(Array.from(newCommitment1), rec1.args)
       .accountsStrict({
         authority: user.publicKey,
         identityState: boot.identityPda,
         verificationResult: verificationPda1,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: entrosVerifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([rec1.ix])
       .signers([user])
       .rpc();
 
@@ -1024,24 +1082,22 @@ describe("entros-anchor", () => {
       [Buffer.from("verification"), user.publicKey.toBuffer(), Buffer.from(nonce2)],
       entrosVerifier.programId
     );
-    const [challengePda2] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("challenge"), user.publicKey.toBuffer(), Buffer.from(nonce2)],
-      entrosVerifier.programId
-    );
-    await entrosVerifier.methods.createChallenge(nonce2).accountsStrict({ challenger: user.publicKey, challenge: challengePda2, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
-    await entrosVerifier.methods.verifyProof(Buffer.from(fixture.proof_bytes), fixture.public_inputs, nonce2).accountsStrict({ verifier: user.publicKey, challenge: challengePda2, verificationResult: verificationPda2, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
+    await entrosVerifier.methods.verifyProof(Buffer.from(fixture.proof_bytes), fixture.public_inputs, nonce2).accountsStrict({ verifier: user.publicKey, verificationResult: verificationPda2, systemProgram: anchor.web3.SystemProgram.programId }).signers([user]).rpc();
 
     try {
       await program.methods
-        .updateAnchor(Array.from(newCommitment1), nonce2)
+        .updateAnchor(Array.from(newCommitment1), rec1.args)
         .accountsStrict({
           authority: user.publicKey,
           identityState: boot.identityPda,
           verificationResult: verificationPda2,
           protocolConfig: protocolConfigPda,
           treasury: treasuryPda,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          verifierProgram: entrosVerifier.programId,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
+        .preInstructions([rec1.ix])
         .signers([user])
         .rpc();
       expect.fail("Should have failed on a stale commitment_prev");

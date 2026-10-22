@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import { expect } from "chai";
-import { BorshInstructionCoder, type Idl } from "@anchor-lang/core";
+import { BN, BorshInstructionCoder, type Idl } from "@anchor-lang/core";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
   ComputeBudgetProgram,
+  Ed25519Program,
   SystemProgram,
   TransactionInstruction,
 } from "@solana/web3.js";
@@ -20,6 +21,7 @@ import {
   deriveEncryptedBaselinePda,
   deriveVerificationPda,
   getPdas,
+  INSTRUCTIONS_SYSVAR,
   loadProofFixture,
   MAX_TRUST_SCORE,
   MIN_STAKE,
@@ -31,10 +33,12 @@ import {
 } from "./encodeDecode.ts";
 import {
   adminKp,
+  buildUpdateReceiptV4Digest,
   createChallenge,
   deterministicKeypair,
   initializeProtocol,
   initSolBalc,
+  LITESVM_VALIDATOR,
   mintAnchor,
   pdasAdmin,
   sendTxns,
@@ -80,11 +84,6 @@ test("compact proof verification costs no more than the legacy instruction", () 
   svm.airdrop(legacySigner.publicKey, initSolBalc);
   svm.airdrop(compactSigner.publicKey, initSolBalc);
 
-  createChallenge(
-    legacySigner,
-    legacyPdas.nonce,
-    legacyPdas.challengePda,
-  );
   const legacyConsumed = verifyProof(
     legacySigner,
     proofBytes,
@@ -94,11 +93,6 @@ test("compact proof verification costs no more than the legacy instruction", () 
     legacyPdas.verificationPda,
   );
 
-  createChallenge(
-    compactSigner,
-    compactPdas.nonce,
-    compactPdas.challengePda,
-  );
   const compactConsumed = verifyProofCompact(
     compactSigner,
     proofBytes,
@@ -162,28 +156,24 @@ test("the complete compact re-verification stays below the default transaction l
     treasuryPda,
   );
 
+  const validatedAt = svm.getClock().unixTimestamp;
+  const receiptDigest = buildUpdateReceiptV4Digest(
+    adminKp.publicKey,
+    publicInputs[0],
+    0,
+    validatedAt,
+  );
+  const receiptIx = Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: LITESVM_VALIDATOR.secretKey,
+    message: receiptDigest,
+  });
+
   const instructions = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
     new TransactionInstruction({
       programId: verifierAddr,
       keys: [
         { pubkey: adminKp.publicKey, isSigner: true, isWritable: true },
-        { pubkey: pdasAdmin.challengePda, isSigner: false, isWritable: true },
-        {
-          pubkey: SystemProgram.programId,
-          isSigner: false,
-          isWritable: false,
-        },
-      ],
-      data: encodeInstruction(verifierCoder, "create_challenge", {
-        nonce: Buffer.from(pdasAdmin.nonce),
-      }),
-    }),
-    new TransactionInstruction({
-      programId: verifierAddr,
-      keys: [
-        { pubkey: adminKp.publicKey, isSigner: true, isWritable: true },
-        { pubkey: pdasAdmin.challengePda, isSigner: false, isWritable: true },
         {
           pubkey: pdasAdmin.verificationPda,
           isSigner: false,
@@ -204,6 +194,7 @@ test("the complete compact re-verification stays below the default transaction l
         min_distance: minDistance,
       }),
     }),
+    receiptIx,
     new TransactionInstruction({
       programId: anchorAddr,
       keys: [
@@ -212,7 +203,7 @@ test("the complete compact re-verification stays below the default transaction l
         {
           pubkey: pdasAdmin.verificationPda,
           isSigner: false,
-          isWritable: false,
+          isWritable: true,
         },
         { pubkey: protocolConfigPda, isSigner: false, isWritable: false },
         { pubkey: treasuryPda, isSigner: false, isWritable: true },
@@ -221,9 +212,23 @@ test("the complete compact re-verification stays below the default transaction l
           isSigner: false,
           isWritable: false,
         },
+        {
+          pubkey: INSTRUCTIONS_SYSVAR,
+          isSigner: false,
+          isWritable: false,
+        },
+        {
+          pubkey: verifierAddr,
+          isSigner: false,
+          isWritable: false,
+        },
       ],
       data: encodeInstruction(anchorCoder, "update_anchor_compact", {
-        verification_nonce: Buffer.from(pdasAdmin.nonce),
+        receipt: {
+          validated_at: new BN(validatedAt.toString()),
+          assurance_tier: 0,
+          session_final_digest: null,
+        },
       }),
     }),
     new TransactionInstruction({

@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect } from "chai";
-import { BorshInstructionCoder, type Idl } from "@anchor-lang/core";
+import { BN, BorshInstructionCoder, type Idl } from "@anchor-lang/core";
 import {
   ComputeBudgetProgram,
+  Ed25519Program,
   Keypair,
   PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SystemProgram,
   Transaction,
   TransactionInstruction,
@@ -24,28 +26,25 @@ const ENTROS_VERIFIER_PROGRAM_ID = new PublicKey(
   "4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV",
 );
 
+const LEGACY_PACKET_LIMIT = 1_232;
+
 const LEGACY_FIXTURES = {
-  createChallenge: {
-    length: 40,
-    sha256: "b4e1fae5a105cedc9523a62d1c9b5f9f6116bfdbf2b6aa2e55448fe5936358f1",
-  },
   verifyProof: {
     length: 432,
     sha256: "3ac0e703f0a8f3bb5ad3f7a739ae8c70989226a05b687c0b760b0ab0fbe7ba07",
   },
   updateAnchor: {
-    length: 72,
-    sha256: "38b5c9dad88efb3eb872a72170b937c1cfe18f63d31e8723638355025c2e84c9",
+    length: 50,
+    sha256: "8ee3d93db2f0c17d51ed7f6c7970ef2cab6ce3a580ec756dfd2527988b05f260",
   },
   setEncryptedBaseline: {
     length: 104,
     sha256: "ede7ccd7468742aff1d28fb84dae4f9213ef5dd07581ba1931ca8c44e873b981",
   },
   transaction: {
-    length: 1_140,
-    messageLength: 1_075,
-    sha256: "3de3a7f5f1353e711edd58528c25971293dd95c4d273f08a662edee907ad969f",
-    messageSha256: "28a5d3d8443c3876b5e8e9ad3155590a9da61a23f2bc1303d90b1da3abd48df4",
+    messageLength: 1_188,
+    uncompressedWireLength: 1_253,
+    messageSha256: "bbcc23adcac075d406614a77fe9eb81109b7b21e76859de997171aa34e5068d4",
   },
 } as const;
 
@@ -55,14 +54,24 @@ const COMPACT_FIXTURES = {
     sha256: "fe15ed962b5bfd18702a402c6706b892ae237834ba8c411c4c913a71779d716d",
   },
   updateAnchor: {
-    length: 40,
-    sha256: "54e6a58f56e30cca4bc93c1df59899bedd09cfa14c7c7e637977e8f8ffd06a02",
+    length: 18,
+    sha256: "a4a78b925692aab1d75fdcb033c2056b26ca8bc6f4055c8e5975f49f1b539ed7",
+  },
+  updateAnchorWithSession: {
+    length: 50,
+    sha256: "0bc87be0925d46a1b2d71624847db8ac776c2b7f98479f120d886155e7cc345a",
   },
   transaction: {
-    length: 1_040,
-    messageLength: 975,
-    sha256: "b0684bad6754e0ab89e69c55a544e46f309feaa4ebcb73193a3745933f776c00",
-    messageSha256: "7cbbd178946231b7f8a2e4d96652c3a1935974409f13f51b3439eb73e59a69f7",
+    length: 1_153,
+    messageLength: 1_088,
+    sha256: "279d805d7cb70e5fbbab64d96210f025b85a371baf4b8227dedb9258688c29d4",
+    messageSha256: "a42483da85de89541f5041dbfa2da30c4b2a9d53533e1147b0e653bea837f9c2",
+  },
+  transactionWithSession: {
+    length: 1_185,
+    messageLength: 1_120,
+    sha256: "40ce147e78dc7740061c944f9f0039d1408e9be22bf41f87d405d1808720bad8",
+    messageSha256: "28833f6e4f7ff01b2c589a0e6ceadb4028ee4be60230cbdf6cfe07008c4b16ab",
   },
 } as const;
 
@@ -103,14 +112,12 @@ function loadProofFixture(): ProofFixture {
 }
 
 interface VerificationInstructionData {
-  createChallenge: Buffer;
   verifyProof: Buffer;
   updateAnchor: Buffer;
   setEncryptedBaseline: Buffer;
 }
 
 const INSTRUCTION_NAMES = [
-  "createChallenge",
   "verifyProof",
   "updateAnchor",
   "setEncryptedBaseline",
@@ -138,7 +145,6 @@ function accountShape(idl: Idl, name: string): AccountMetaShape[] {
 
 const VERIFY_ACCOUNT_SHAPE: AccountMetaShape[] = [
   { name: "verifier", signer: true, writable: true },
-  { name: "challenge", signer: false, writable: true },
   { name: "verification_result", signer: false, writable: true },
   { name: "system_program", signer: false, writable: false },
 ];
@@ -146,23 +152,58 @@ const VERIFY_ACCOUNT_SHAPE: AccountMetaShape[] = [
 const UPDATE_ACCOUNT_SHAPE: AccountMetaShape[] = [
   { name: "authority", signer: true, writable: true },
   { name: "identity_state", signer: false, writable: true },
-  { name: "verification_result", signer: false, writable: false },
+  { name: "verification_result", signer: false, writable: true },
   { name: "protocol_config", signer: false, writable: false },
   { name: "treasury", signer: false, writable: true },
   { name: "system_program", signer: false, writable: false },
+  { name: "instructions_sysvar", signer: false, writable: false },
+  { name: "verifier_program", signer: false, writable: false },
 ];
+
+function buildUpdateReceiptIx(
+  authority: PublicKey,
+  commitmentNew: Buffer,
+  assuranceTier: number,
+  sessionFinalDigest: Buffer | null,
+): TransactionInstruction {
+  const validator = Keypair.fromSeed(Buffer.alloc(32, 9));
+  const preimage = Buffer.alloc(136);
+  Buffer.from("entros-validator-receipt-v4\0", "utf8").copy(preimage, 0);
+  preimage[28] = 4;
+  preimage.writeUInt16LE(1, 29);
+  authority.toBuffer().copy(preimage, 31);
+  commitmentNew.copy(preimage, 63);
+  preimage.writeBigInt64LE(BigInt(1_700_000_000), 95);
+  if (sessionFinalDigest) {
+    sessionFinalDigest.copy(preimage, 103);
+  }
+  preimage[135] = assuranceTier;
+  const digest = createHash("sha256").update(preimage).digest();
+  return Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: validator.secretKey,
+    message: digest,
+  });
+}
 
 function buildTransaction(
   instructionData: VerificationInstructionData,
+  commitmentNew: Buffer,
+  assuranceTier = 0,
+  sessionFinalDigest: Buffer | null = null,
 ): Transaction {
   const authority = deterministicPublicKey(1);
-  const challenge = deterministicPublicKey(2);
   const verificationResult = deterministicPublicKey(3);
   const identityState = deterministicPublicKey(4);
   const protocolConfig = deterministicPublicKey(5);
   const treasury = deterministicPublicKey(6);
   const encryptedBaseline = deterministicPublicKey(7);
   const recentBlockhash = deterministicPublicKey(8).toBase58();
+  const receiptIx = buildUpdateReceiptIx(
+    authority,
+    commitmentNew,
+    assuranceTier,
+    sessionFinalDigest,
+  );
 
   return new Transaction({ feePayer: authority, recentBlockhash }).add(
     ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
@@ -170,20 +211,6 @@ function buildTransaction(
       programId: ENTROS_VERIFIER_PROGRAM_ID,
       keys: [
         { pubkey: authority, isSigner: true, isWritable: true },
-        { pubkey: challenge, isSigner: false, isWritable: true },
-        {
-          pubkey: SystemProgram.programId,
-          isSigner: false,
-          isWritable: false,
-        },
-      ],
-      data: instructionData.createChallenge,
-    }),
-    new TransactionInstruction({
-      programId: ENTROS_VERIFIER_PROGRAM_ID,
-      keys: [
-        { pubkey: authority, isSigner: true, isWritable: true },
-        { pubkey: challenge, isSigner: false, isWritable: true },
         { pubkey: verificationResult, isSigner: false, isWritable: true },
         {
           pubkey: SystemProgram.programId,
@@ -193,16 +220,27 @@ function buildTransaction(
       ],
       data: instructionData.verifyProof,
     }),
+    receiptIx,
     new TransactionInstruction({
       programId: ENTROS_ANCHOR_PROGRAM_ID,
       keys: [
         { pubkey: authority, isSigner: true, isWritable: true },
         { pubkey: identityState, isSigner: false, isWritable: true },
-        { pubkey: verificationResult, isSigner: false, isWritable: false },
+        { pubkey: verificationResult, isSigner: false, isWritable: true },
         { pubkey: protocolConfig, isSigner: false, isWritable: false },
         { pubkey: treasury, isSigner: false, isWritable: true },
         {
           pubkey: SystemProgram.programId,
+          isSigner: false,
+          isWritable: false,
+        },
+        {
+          pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
+          isSigner: false,
+          isWritable: false,
+        },
+        {
+          pubkey: ENTROS_VERIFIER_PROGRAM_ID,
           isSigner: false,
           isWritable: false,
         },
@@ -236,9 +274,6 @@ function buildLegacyWireFixture(): {
   const nonce = Buffer.alloc(32, 7);
 
   const instructionData = {
-    createChallenge: encodeInstruction(verifierCoder, "create_challenge", {
-      nonce,
-    }),
     verifyProof: encodeInstruction(verifierCoder, "verify_proof", {
       proof_bytes: proofBytes,
       public_inputs: publicInputs,
@@ -246,7 +281,11 @@ function buildLegacyWireFixture(): {
     }),
     updateAnchor: encodeInstruction(anchorCoder, "update_anchor", {
       new_commitment: publicInputs[0],
-      verification_nonce: nonce,
+      receipt: {
+        validated_at: new BN(1_700_000_000),
+        assurance_tier: 0,
+        session_final_digest: null,
+      },
     }),
     setEncryptedBaseline: encodeInstruction(
       anchorCoder,
@@ -255,12 +294,17 @@ function buildLegacyWireFixture(): {
     ),
   };
 
-  return { instructionData, transaction: buildTransaction(instructionData) };
+  return {
+    instructionData,
+    transaction: buildTransaction(instructionData, publicInputs[0]),
+  };
 }
 
 function buildCompactWireFixture(): {
   instructionData: VerificationInstructionData;
+  updateAnchorWithSession: Buffer;
   transaction: Transaction;
+  transactionWithSession: Transaction;
 } {
   const fixture = loadProofFixture();
   const proofBytes = Buffer.from(fixture.proof_bytes);
@@ -268,11 +312,9 @@ function buildCompactWireFixture(): {
   const nonce = Buffer.alloc(32, 7);
   const threshold = publicInputs[2].readUInt16BE(30);
   const minDistance = publicInputs[3].readUInt16BE(30);
+  const sessionFinalDigest = Buffer.alloc(32, 10);
 
   const instructionData = {
-    createChallenge: encodeInstruction(verifierCoder, "create_challenge", {
-      nonce,
-    }),
     verifyProof: encodeInstruction(verifierCoder, "verify_proof_compact", {
       nonce,
       proof_bytes: proofBytes,
@@ -282,7 +324,11 @@ function buildCompactWireFixture(): {
       min_distance: minDistance,
     }),
     updateAnchor: encodeInstruction(anchorCoder, "update_anchor_compact", {
-      verification_nonce: nonce,
+      receipt: {
+        validated_at: new BN(1_700_000_000),
+        assurance_tier: 0,
+        session_final_digest: null,
+      },
     }),
     setEncryptedBaseline: encodeInstruction(
       anchorCoder,
@@ -291,7 +337,29 @@ function buildCompactWireFixture(): {
     ),
   };
 
-  return { instructionData, transaction: buildTransaction(instructionData) };
+  const updateAnchorWithSession = encodeInstruction(
+    anchorCoder,
+    "update_anchor_compact",
+    {
+      receipt: {
+        validated_at: new BN(1_700_000_000),
+        assurance_tier: 1,
+        session_final_digest: Array.from(sessionFinalDigest),
+      },
+    },
+  );
+
+  return {
+    instructionData,
+    updateAnchorWithSession,
+    transaction: buildTransaction(instructionData, publicInputs[0]),
+    transactionWithSession: buildTransaction(
+      { ...instructionData, updateAnchor: updateAnchorWithSession },
+      publicInputs[0],
+      1,
+      sessionFinalDigest,
+    ),
+  };
 }
 
 describe("legacy verification transaction wire compatibility", () => {
@@ -307,16 +375,15 @@ describe("legacy verification transaction wire compatibility", () => {
     });
   }
 
-  it("preserves the complete legacy transaction", () => {
-    const serialized = fixture.transaction.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    });
+  it("pins the uncompressed legacy message and proves compact encoding is required", () => {
     const message = fixture.transaction.serializeMessage();
+    const uncompressedWireLength = 1 + 64 + message.length;
 
-    expect(serialized).to.have.length(LEGACY_FIXTURES.transaction.length);
     expect(message).to.have.length(LEGACY_FIXTURES.transaction.messageLength);
-    expect(sha256(serialized)).to.equal(LEGACY_FIXTURES.transaction.sha256);
+    expect(uncompressedWireLength).to.equal(
+      LEGACY_FIXTURES.transaction.uncompressedWireLength,
+    );
+    expect(uncompressedWireLength).to.be.greaterThan(LEGACY_PACKET_LIMIT);
     expect(sha256(message)).to.equal(
       LEGACY_FIXTURES.transaction.messageSha256,
     );
@@ -361,7 +428,16 @@ describe("compact verification transaction wire format", () => {
     });
   }
 
-  it("keeps the complete transaction below the legacy limit", () => {
+  it("pins updateAnchorCompact bytes with session_final_digest", () => {
+    expect(fixture.updateAnchorWithSession).to.have.length(
+      COMPACT_FIXTURES.updateAnchorWithSession.length,
+    );
+    expect(sha256(fixture.updateAnchorWithSession)).to.equal(
+      COMPACT_FIXTURES.updateAnchorWithSession.sha256,
+    );
+  });
+
+  it("keeps the complete transaction below the legacy limit with and without session digest", () => {
     const serialized = fixture.transaction.serialize({
       requireAllSignatures: false,
       verifySignatures: false,
@@ -374,8 +450,26 @@ describe("compact verification transaction wire format", () => {
     expect(sha256(message)).to.equal(
       COMPACT_FIXTURES.transaction.messageSha256,
     );
-    expect(serialized.length).to.be.lessThan(
-      LEGACY_FIXTURES.transaction.length,
+    expect(serialized.length).to.be.lessThan(LEGACY_PACKET_LIMIT);
+
+    const serializedWithSession = fixture.transactionWithSession.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    });
+    const messageWithSession = fixture.transactionWithSession.serializeMessage();
+
+    expect(serializedWithSession).to.have.length(
+      COMPACT_FIXTURES.transactionWithSession.length,
     );
+    expect(messageWithSession).to.have.length(
+      COMPACT_FIXTURES.transactionWithSession.messageLength,
+    );
+    expect(sha256(serializedWithSession)).to.equal(
+      COMPACT_FIXTURES.transactionWithSession.sha256,
+    );
+    expect(sha256(messageWithSession)).to.equal(
+      COMPACT_FIXTURES.transactionWithSession.messageSha256,
+    );
+    expect(serializedWithSession.length).to.be.lessThan(LEGACY_PACKET_LIMIT);
   });
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { struct, u8, u32 } from "@solana/buffer-layout";
 import { publicKey, u64 } from "@solana/buffer-layout-utils";
@@ -90,8 +91,6 @@ export const pdasBySignerKp = (signerKp: Keypair) => {
 export const verifyUser = (signerKp: Keypair) => {
   const { identityPda, mintPda, nonce, challengePda, verificationPda } =
     pdasBySignerKp(signerKp);
-
-  createChallenge(signerKp, nonce, challengePda);
 
   const fixture = loadProofFixture();
 
@@ -701,10 +700,32 @@ export const migrateIdentity = (
   );
 };
 
+export const buildUpdateReceiptV4Digest = (
+  wallet: PublicKey,
+  commitmentNew: Uint8Array | number[],
+  projectionVersion: number,
+  validatedAt: bigint,
+  assuranceTier = 0,
+  sessionFinalDigest: Uint8Array | number[] | null = null,
+): Buffer => {
+  const preimage = Buffer.alloc(136);
+  Buffer.from("entros-validator-receipt-v4\0", "ascii").copy(preimage, 0);
+  preimage[28] = 4;
+  preimage.writeUInt16LE(projectionVersion, 29);
+  wallet.toBuffer().copy(preimage, 31);
+  Buffer.from(commitmentNew).copy(preimage, 63);
+  preimage.writeBigInt64LE(validatedAt, 95);
+  if (sessionFinalDigest) {
+    Buffer.from(sessionFinalDigest).copy(preimage, 103);
+    preimage[135] = assuranceTier;
+  }
+  return createHash("sha256").update(preimage).digest();
+};
+
 export const updateAnchor = (
   signer: Keypair,
   new_commitment: Buffer<ArrayBuffer>,
-  verification_nonce: number[],
+  _verification_nonce: number[],
   verification_result: PublicKey,
   identity_state: PublicKey,
   protocol_config: PublicKey,
@@ -715,23 +736,43 @@ export const updateAnchor = (
   const progAddr = anchorAddr;
   const new_commitment_array = Array.from(new_commitment);
   console.log("new_commitment_array:", new_commitment_array);
-  const argData = [...new_commitment_array, ...verification_nonce];
+  const validatedAt = svm.getClock().unixTimestamp;
+  const validatedAtBuf = Buffer.alloc(8);
+  validatedAtBuf.writeBigInt64LE(validatedAt);
+  const identityRaw = svm.getAccount(identity_state)?.data;
+  const projectionVersion =
+    identityRaw && identityRaw.length >= 585
+      ? Buffer.from(identityRaw).readUInt16LE(583)
+      : 0;
+  const receiptDigest = buildUpdateReceiptV4Digest(
+    signer.publicKey,
+    new_commitment,
+    projectionVersion,
+    validatedAt,
+  );
+  const receiptIx = Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: LITESVM_VALIDATOR.secretKey,
+    message: receiptDigest,
+  });
+  const argData = [...new_commitment_array, ...validatedAtBuf, 0, 0];
   const blockhash = svm.latestBlockhash();
   const ix = new TransactionInstruction({
     keys: [
       { pubkey: signer.publicKey, isSigner: true, isWritable: true },
       { pubkey: identity_state, isSigner: false, isWritable: true },
-      { pubkey: verification_result, isSigner: false, isWritable: false },
+      { pubkey: verification_result, isSigner: false, isWritable: true },
       { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
       { pubkey: treasury, isSigner: false, isWritable: true },
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: INSTRUCTIONS_SYSVAR, isSigner: false, isWritable: false },
+      { pubkey: verifierAddr, isSigner: false, isWritable: false },
     ],
     programId: progAddr,
     data: Buffer.from([...disc, ...argData]),
   });
   sendTxns(
     blockhash,
-    [ix],
+    [receiptIx, ix],
     [signer],
     progAddr,
     maxComputeBudgets.update_anchor,
@@ -747,27 +788,14 @@ export const resetIdentityState = (
   treasury: PublicKey,
   expectedErr = "",
 ) => {
-  const disc = [26, 78, 86, 143, 247, 132, 85, 203]; //copied from Anchor IDL
-  const progAddr = anchorAddr;
-  const argData = [...new_commitment, 0, 0];
-  const blockhash = svm.latestBlockhash();
-  const ix = new TransactionInstruction({
-    keys: [
-      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: identity_state, isSigner: false, isWritable: true },
-      { pubkey: protocol_config, isSigner: false, isWritable: false }, //belongs to registry
-      { pubkey: treasury, isSigner: false, isWritable: true },
-      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
-    ],
-    programId: progAddr,
-    data: Buffer.from([...disc, ...argData]),
-  });
-  sendTxns(
-    blockhash,
-    [ix],
-    [signer],
-    progAddr,
-    maxComputeBudgets.reset_identity_state,
+  resetIdentityStateVersioned(
+    signer,
+    new_commitment,
+    identity_state,
+    protocol_config,
+    treasury,
+    0,
+    { purpose: 3, validatedAt: svm.getClock().unixTimestamp },
     expectedErr,
   );
 };
@@ -930,7 +958,7 @@ export const verifyProof = (
   proofBytes: Buffer<ArrayBuffer>, // Vec<u8>
   publicInputs: number[][], // Vec<[u8; 32]>
   nonce: number[], // [u8; 32]
-  challengePda: PublicKey,
+  _challengePda: PublicKey,
   verificationPda: PublicKey,
   expectedErr = "",
 ) => {
@@ -951,7 +979,6 @@ export const verifyProof = (
   const ix = new TransactionInstruction({
     keys: [
       { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: challengePda, isSigner: false, isWritable: true },
       { pubkey: verificationPda, isSigner: false, isWritable: true },
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
     ],
@@ -973,7 +1000,7 @@ export const verifyProofCompact = (
   proofBytes: Buffer<ArrayBuffer>,
   publicInputs: number[][],
   nonce: number[],
-  challengePda: PublicKey,
+  _challengePda: PublicKey,
   verificationPda: PublicKey,
   expectedErr = "",
 ) => {
@@ -989,7 +1016,6 @@ export const verifyProofCompact = (
   const instruction = new TransactionInstruction({
     keys: [
       { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: challengePda, isSigner: false, isWritable: true },
       { pubkey: verificationPda, isSigner: false, isWritable: true },
       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
     ],

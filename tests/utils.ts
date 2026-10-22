@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as anchor from "@anchor-lang/core";
 import type { AnchorProvider } from "@anchor-lang/core";
 import { web3 } from "@anchor-lang/core";
 
@@ -78,6 +80,46 @@ export function buildResetReceiptIx(
     privateKey: TEST_VALIDATOR.secretKey,
     message,
   });
+}
+
+export function buildUpdateReceipt(
+  walletPubkey: PublicKey,
+  commitment: Buffer | number[],
+  projectionVersion = 0,
+  validatedAt = Math.floor(Date.now() / 1000) - 30,
+  assuranceTier = 0,
+  sessionFinalDigest: number[] | null = null,
+): {
+  ix: web3.TransactionInstruction;
+  args: {
+    validatedAt: anchor.BN;
+    assuranceTier: number;
+    sessionFinalDigest: number[] | null;
+  };
+} {
+  const preimage = Buffer.alloc(136);
+  Buffer.from("entros-validator-receipt-v4\0", "ascii").copy(preimage, 0);
+  preimage[28] = 4;
+  preimage.writeUInt16LE(projectionVersion, 29);
+  walletPubkey.toBuffer().copy(preimage, 31);
+  Buffer.from(commitment).copy(preimage, 63);
+  preimage.writeBigInt64LE(BigInt(validatedAt), 95);
+  if (sessionFinalDigest) {
+    Buffer.from(sessionFinalDigest).copy(preimage, 103);
+  }
+  preimage[135] = assuranceTier;
+  const digest = createHash("sha256").update(preimage).digest();
+  return {
+    ix: web3.Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: TEST_VALIDATOR.secretKey,
+      message: digest,
+    }),
+    args: {
+      validatedAt: new anchor.BN(validatedAt),
+      assuranceTier,
+      sessionFinalDigest,
+    },
+  };
 }
 
 function buildReceiptMessage(
@@ -246,22 +288,11 @@ export async function bootstrapVerifiedUser(params: {
     entrosVerifier.programId,
   );
 
-  await entrosVerifier.methods
-    .createChallenge(nonce)
-    .accountsStrict({
-      challenger: user.publicKey,
-      challenge: challengePda,
-      systemProgram: web3.SystemProgram.programId,
-    })
-    .signers([user])
-    .rpc();
-
   const proofBytes = Buffer.from(fixture.proof_bytes);
   await entrosVerifier.methods
     .verifyProof(proofBytes, fixture.public_inputs, nonce)
     .accountsStrict({
       verifier: user.publicKey,
-      challenge: challengePda,
       verificationResult: verificationPda,
       systemProgram: web3.SystemProgram.programId,
     })

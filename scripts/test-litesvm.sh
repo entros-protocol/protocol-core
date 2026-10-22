@@ -13,6 +13,7 @@ readonly TEST_FILES=(
   "tests-litesvm-ts/test-coverage.ts"
   "tests-litesvm-ts/token2022-expansion.ts"
   "tests-litesvm-ts/transfer-sol.ts"
+  "tests-litesvm-ts/update-receipt-and-rollover-tests.ts"
   "tests-litesvm-ts/wallet-migration.ts"
 )
 

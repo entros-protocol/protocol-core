@@ -8,7 +8,12 @@ import {
 import type { EntrosRegistry } from "../target/types/entros_registry";
 import type { EntrosAnchor } from "../target/types/entros_anchor";
 import type { EntrosVerifier } from "../target/types/entros_verifier";
-import { buildMintReceiptIx, fundAccount, loadProofFixture } from "./utils";
+import {
+  buildMintReceiptIx,
+  buildUpdateReceipt,
+  fundAccount,
+  loadProofFixture,
+} from "./utils";
 
 const fixture = loadProofFixture();
 
@@ -135,28 +140,8 @@ describe("e2e: full Entros verification flow", () => {
     expect(identity.verificationCount).to.equal(0);
     expect(identity.projectionVersion).to.equal(projectionVersion);
 
-    // 4. Create verification challenge
+    // 4. Submit valid mock proof
     const nonce = Array.from(anchor.web3.Keypair.generate().publicKey.toBytes());
-    const [challengePda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("challenge"),
-        e2eUser.publicKey.toBuffer(),
-        Buffer.from(nonce),
-      ],
-      verifier.programId
-    );
-
-    await verifier.methods
-      .createChallenge(nonce)
-      .accountsStrict({
-        challenger: e2eUser.publicKey,
-        challenge: challengePda,
-        systemProgram: anchor.web3.SystemProgram.programId,
-      })
-      .signers([e2eUser])
-      .rpc();
-
-    // 5. Submit valid mock proof
     const [verificationPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [
         Buffer.from("verification"),
@@ -173,7 +158,6 @@ describe("e2e: full Entros verification flow", () => {
       .verifyProof(Buffer.from(mockProof), publicInputs, nonce)
       .accountsStrict({
         verifier: e2eUser.publicKey,
-        challenge: challengePda,
         verificationResult: verificationPda,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
@@ -183,23 +167,32 @@ describe("e2e: full Entros verification flow", () => {
     const result = await verifier.account.verificationResult.fetch(verificationPda);
     expect(result.isValid).to.be.true;
 
-    // 6. Update anchor with new commitment (trust score auto-computed).
-    // The VerificationResult PDA and nonce bind this update to its proof.
-    // The instruction rejects when either value is missing.
+    // 5. Update anchor with new commitment (trust score auto-computed).
+    // The VerificationResult PDA and update receipt bind this update to its proof.
+    const updateRec = buildUpdateReceipt(
+      e2eUser.publicKey,
+      newCommitment,
+      projectionVersion,
+    );
     await entrosAnchor.methods
-      .updateAnchor(Array.from(newCommitment), nonce)
+      .updateAnchor(Array.from(newCommitment), updateRec.args)
       .accountsStrict({
         authority: e2eUser.publicKey,
         identityState: identityPda,
         verificationResult: verificationPda,
         protocolConfig: protocolConfigPda,
         treasury: treasuryPda,
+        instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        verifierProgram: verifier.programId,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([updateRec.ix])
       .signers([e2eUser])
       .rpc();
 
-    // 7. Verify final state
+    // 6. Verify final state and atomic VerificationResult closure
+    const closedResult = await verifier.account.verificationResult.fetchNullable(verificationPda);
+    expect(closedResult).to.be.null;
     identity = await entrosAnchor.account.identityState.fetch(identityPda);
     expect(identity.verificationCount).to.equal(1);
     // Trust score auto-computed: 1 verification at day 0 → recency 100, base 100, age ~0

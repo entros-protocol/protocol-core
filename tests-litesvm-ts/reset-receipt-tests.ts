@@ -73,7 +73,7 @@ test("setup a projection-zero identity and advance the protocol", () => {
   );
 });
 
-test("projection-zero reset rejects unexpected receipt accounts", () => {
+test("projection-zero reset rejects a missing receipt", () => {
   resetIdentityStateVersioned(
     adminKp,
     resetCommitment,
@@ -81,8 +81,8 @@ test("projection-zero reset rejects unexpected receipt accounts", () => {
     protocolConfigPda,
     treasuryPda,
     0,
-    { purpose: 3, validatedAt: fixedNowSecs },
-    "InvalidResetReceiptAccounts",
+    null,
+    "MissingValidatorReceipt",
   );
 });
 

@@ -25,6 +25,7 @@ export async function runAdversarialChecks({
   send,
   counter,
   receipt,
+  updateReceipt,
   pda,
   createProof,
   input,
@@ -155,13 +156,15 @@ export async function runAdversarialChecks({
   assert.equal(beforeActivationStats.averageTrustScore, 355);
   svm.addProgramFromFile(anchorAddr, join(dir, "programs/entros_anchor.so"));
   unchanged(original);
+  const partialUpdateRec = updateReceipt(wallet.publicKey, next, 1);
   fail(
     "anchor-first partial upgrade rejects legacy state update",
     [
+      partialUpdateRec.ix,
       ix(
         "entros_anchor",
         "update_anchor_compact",
-        { verification_nonce: Buffer.alloc(32, 180) },
+        partialUpdateRec.args,
         {
           ...map,
           verification_result: pda(
@@ -225,7 +228,6 @@ export async function runAdversarialChecks({
     const proof = await createProof(artifacts, context, input);
     const accounts = {
       ...map,
-      challenge: pda("challenge", wallet.publicKey, verifierAddr, [nonce]),
       verification_result: pda(
         "verification_bound",
         wallet.publicKey,
@@ -242,15 +244,16 @@ export async function runAdversarialChecks({
       min_distance: 3,
       valid_until: new BN(String(validUntil)),
     };
+    const rec = updateReceipt(wallet.publicKey, next, 1);
     return {
       accounts,
       args,
-      create: ix("entros_verifier", "create_challenge", { nonce }, accounts),
       verify: ix("entros_verifier", "verify_proof_bound", args, accounts),
+      updateReceiptIx: rec.ix,
       update: ix(
         "entros_anchor",
         "update_anchor_bound",
-        { verification_nonce: nonce },
+        rec.args,
         accounts,
       ),
     };
@@ -265,10 +268,9 @@ export async function runAdversarialChecks({
       );
       fail(
         "anchor-first partial upgrade rejects new proof until verifier activates",
-        [candidate.create, candidate.verify],
+        [candidate.verify],
         "UnsupportedProofGeneration",
       );
-      assert.equal(svm.getAccount(candidate.accounts.challenge), null);
       assert.equal(
         svm.getAccount(candidate.accounts.verification_result),
         null,
@@ -280,7 +282,7 @@ export async function runAdversarialChecks({
     }
     send(
       `competing request ${index} verifies the same counter`,
-      [candidate.create, candidate.verify],
+      [candidate.verify],
       [wallet],
     );
     candidates.push(candidate);
@@ -351,7 +353,11 @@ export async function runAdversarialChecks({
     const malformed = clone(resultOriginal);
     mutate(malformed);
     svm.setAccount(first.accounts.verification_result, malformed);
-    fail(`reject ${label} without changing accounts`, [first.update], reason);
+    fail(
+      `reject ${label} without changing accounts`,
+      [first.updateReceiptIx, first.update],
+      reason,
+    );
     assert.deepEqual(
       clone(svm.getAccount(first.accounts.verification_result)),
       malformed,
@@ -364,17 +370,21 @@ export async function runAdversarialChecks({
   svm.setAccount(map.identity_state, overflowIdentity);
   fail(
     "late identity overflow rolls back advanced request counter",
-    [first.update],
+    [first.updateReceiptIx, first.update],
     "ArithmeticOverflow",
   );
   svm.setAccount(map.identity_state, identityOriginal);
   const order = [5, 2, 7, 0, 6, 1, 4, 3];
   send(
     "one competing request consumes the shared counter",
-    [candidates[order[0]].update],
+    [candidates[order[0]].updateReceiptIx, candidates[order[0]].update],
     [wallet],
   );
   assert.equal(counter(wallet.publicKey), 1n);
+  assert.equal(
+    svm.getAccount(candidates[order[0]].accounts.verification_result),
+    null,
+  );
   assert.equal(
     Buffer.from(svm.getAccount(map.identity_state).data).readUInt32LE(56),
     43,
@@ -383,7 +393,7 @@ export async function runAdversarialChecks({
     for (const index of order)
       fail(
         `contention replay round ${round} request ${index}`,
-        [candidates[index].update],
+        [candidates[index].updateReceiptIx, candidates[index].update],
         "InvalidRequestContext",
       );
   }

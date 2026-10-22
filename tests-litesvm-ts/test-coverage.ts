@@ -559,5 +559,17 @@ test("entrosVerifier.closeVerificationResult()", async () => {
   console.log("\n----------------== entrosVerifier.closeVerificationResult()");
   signerKp = adminKp;
   pdas = pdasBySignerKp(signerKp);
+  // updateAnchor atomically closed verificationPda, so verify a fresh proof first
+  // to exercise standalone closeVerificationResult.
+  const proofBytes: Buffer<ArrayBuffer> = Buffer.from(fixture.proof_bytes);
+  const publicInputs: number[][] = fixture.public_inputs;
+  verifyProof(
+    signerKp,
+    proofBytes,
+    publicInputs,
+    pdas.nonce,
+    pdas.challengePda,
+    pdas.verificationPda,
+  );
   closeVerificationResult(signerKp, pdas.verificationPda);
 });

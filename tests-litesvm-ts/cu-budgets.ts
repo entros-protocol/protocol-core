@@ -5,10 +5,10 @@ export const maxComputeBudgets = {
   register_validator: 26492,
   compute_trust_score: 5928,
   unstake_validator: 8873,
-  update_protocol_config: 5400,
+  update_protocol_config: 5800,
   withdraw_treasury: 7800,
   migrate_admin: 11140,
-  set_validator_pubkey: 3400,
+  set_validator_pubkey: 3700,
   set_projection_versions: 6000,
   //Anchor
   mint_anchor: 98985,

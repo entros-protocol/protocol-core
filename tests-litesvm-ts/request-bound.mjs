@@ -21,6 +21,7 @@ import { TransactionMetadata } from "litesvm";
 import {
   svm,
   adminKp,
+  buildUpdateReceiptV4Digest,
   deterministicKeypair,
   initializeProtocol,
   LITESVM_VALIDATOR,
@@ -104,6 +105,7 @@ const addresses = (wallet) => ({
   protocol_config: protocolConfigPda,
   treasury: treasuryPda,
   instructions_sysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+  verifier_program: verifierAddr,
   proof_request_state: pda("proof_request_state", wallet),
   encrypted_baseline: pda("encrypted_baseline", wallet),
 });
@@ -195,6 +197,27 @@ function receipt(wallet, commitment, purpose, projection = 1) {
     ]),
   });
 }
+function updateReceipt(wallet, commitment, projection = 1) {
+  const validatedAt = svm.getClock().unixTimestamp;
+  return {
+    ix: Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: LITESVM_VALIDATOR.secretKey,
+      message: buildUpdateReceiptV4Digest(
+        wallet,
+        commitment,
+        projection,
+        validatedAt,
+      ),
+    }),
+    args: {
+      receipt: {
+        validated_at: new BN(validatedAt.toString()),
+        assurance_tier: 0,
+        session_final_digest: null,
+      },
+    },
+  };
+}
 const input = await generateValidInput(10, 30, 3, "bound-protocol");
 const previous = Buffer.from(field(input.commitment_prev), "hex"),
   next = Buffer.from(field(input.commitment_new), "hex");
@@ -264,7 +287,6 @@ const context = {
 const proof = await createProof(artifacts, context, input);
 const boundMap = {
   ...map,
-  challenge: pda("challenge", wallet.publicKey, verifierAddr, [nonce]),
   verification_result: pda(
     "verification_bound",
     wallet.publicKey,
@@ -281,18 +303,17 @@ const args = {
   min_distance: 3,
   valid_until: new BN(context.validUntil),
 };
-const create = ix("entros_verifier", "create_challenge", { nonce }, boundMap);
 const verify = ix("entros_verifier", "verify_proof_bound", args, boundMap);
+const updateRec = updateReceipt(wallet.publicKey, next, 1);
 const update = ix(
   "entros_anchor",
   "update_anchor_bound",
-  { verification_nonce: nonce },
+  updateRec.args,
   boundMap,
 );
 send(
   "wrong expiry fails",
   [
-    create,
     ix(
       "entros_verifier",
       "verify_proof_bound",
@@ -307,7 +328,6 @@ assert.equal(counter(wallet.publicKey), 1n);
 const nonce2 = Buffer.alloc(32, 92);
 const map2 = {
   ...map,
-  challenge: pda("challenge", wallet.publicKey, verifierAddr, [nonce2]),
   verification_result: pda(
     "verification_bound",
     wallet.publicKey,
@@ -318,7 +338,6 @@ const map2 = {
 send(
   "nonce substitution fails",
   [
-    ix("entros_verifier", "create_challenge", { nonce: nonce2 }, map2),
     ix(
       "entros_verifier",
       "verify_proof_bound",
@@ -337,7 +356,6 @@ const proof2 = await createProof(
 send(
   "concurrent counter result created",
   [
-    ix("entros_verifier", "create_challenge", { nonce: nonce2 }, map2),
     ix(
       "entros_verifier",
       "verify_proof_bound",
@@ -366,7 +384,6 @@ send(
 );
 const otherBound = {
   ...otherMap,
-  challenge: pda("challenge", other.publicKey, verifierAddr, [nonce]),
   verification_result: pda(
     "verification_bound",
     other.publicKey,
@@ -377,7 +394,6 @@ const otherBound = {
 send(
   "wallet substitution fails",
   [
-    ix("entros_verifier", "create_challenge", { nonce }, otherBound),
     ix("entros_verifier", "verify_proof_bound", args, otherBound),
   ],
   [other],
@@ -388,8 +404,8 @@ send(
   [
     ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
     ix("entros_anchor", "prepare_proof_request", {}, map),
-    create,
     verify,
+    updateRec.ix,
     update,
     ix(
       "entros_anchor",
@@ -401,19 +417,21 @@ send(
   [wallet],
 );
 assert.equal(counter(wallet.publicKey), 2n);
+assert.equal(svm.getAccount(boundMap.verification_result), null);
 send(
   "result consumption repeats fail",
-  [update],
+  [updateRec.ix, update],
   [wallet],
   "InvalidRequestContext",
 );
 send(
   "concurrent result loses consumption race",
   [
+    updateRec.ix,
     ix(
       "entros_anchor",
       "update_anchor_bound",
-      { verification_nonce: nonce2 },
+      updateRec.args,
       map2,
     ),
   ],
@@ -437,7 +455,7 @@ send(
 assert.equal(counter(wallet.publicKey), 3n);
 send(
   "old result fails after commitment restoration",
-  [update],
+  [updateRec.ix, update],
   [wallet],
   "InvalidRequestContext",
 );
@@ -447,26 +465,26 @@ send(
     ix(
       "entros_verifier",
       "close_bound_verification_result",
-      { _nonce: nonce },
-      boundMap,
+      { _nonce: nonce2 },
+      map2,
     ),
-    ix("entros_verifier", "close_challenge", {}, boundMap),
   ],
   [wallet],
 );
 send(
   "recreated nonce cannot replay old proof",
-  [create, verify],
+  [verify],
   [wallet],
   "ProofVerificationFailed",
 );
 send(
   "legacy update fails after activation",
   [
+    updateRec.ix,
     ix(
       "entros_anchor",
       "update_anchor_compact",
-      { verification_nonce: nonce },
+      updateRec.args,
       {
         ...boundMap,
         verification_result: pda(
@@ -689,7 +707,6 @@ for (const [index, length] of [543, 551, 583].entries()) {
   const oldNonce = Buffer.alloc(32, 94 + index);
   const oldBound = {
     ...oldMap,
-    challenge: pda("challenge", oldWallet.publicKey, verifierAddr, [oldNonce]),
     verification_result: pda(
       "verification_bound",
       oldWallet.publicKey,
@@ -700,7 +717,6 @@ for (const [index, length] of [543, 551, 583].entries()) {
   send(
     `old layout ${length} fails proof read`,
     [
-      ix("entros_verifier", "create_challenge", { nonce: oldNonce }, oldBound),
       ix(
         "entros_verifier",
         "verify_proof_bound",
@@ -760,6 +776,7 @@ const adversarial = process.env.ENTROS_ISOLATED_PROGRAM_IDS
       send,
       counter,
       receipt,
+      updateReceipt,
       pda,
       generateValidInput,
       createProof,
