@@ -76,7 +76,7 @@ pub enum EntrosAnchorError {
     ReceiptProjectionVersionMismatch,
     #[msg("Requested projection version does not match the current protocol version")]
     ProjectionVersionMismatch,
-    #[msg("Reset requires exactly one instructions sysvar account for versioned projections and none for projection zero")]
+    #[msg("Reset requires the instructions sysvar account for validator receipt verification")]
     InvalidResetReceiptAccounts,
     #[msg("Unsupported proof generation")]
     UnsupportedProofGeneration,
@@ -84,4 +84,12 @@ pub enum EntrosAnchorError {
     InvalidRequestContext,
     #[msg("Receipt assurance tier is not a known tier")]
     InvalidAssuranceTier,
+    #[msg("Proof commitment_new must differ from commitment_prev")]
+    CommitmentUnchanged,
+    #[msg("VerificationResult PDA does not match canonical verifier seeds")]
+    InvalidVerificationResultPda,
+    #[msg("Invalid verifier program account")]
+    InvalidVerifierProgram,
+    #[msg("Receipt validated_at precedes the identity's last verification timestamp")]
+    ReceiptAlreadyUsed,
 }

@@ -110,6 +110,8 @@ const VERIFICATION_RESULT_DISCRIMINATOR: [u8; 8] = [104, 111, 80, 172, 219, 191,
 /// Keep synchronized with entros-verifier/src/state.rs.
 const VR_OFFSET_VERIFIER: usize = 8;
 const VR_OFFSET_VERIFIED_AT: usize = 72;
+const VR_OFFSET_NONCE: usize = 81;
+const VR_OFFSET_BUMP: usize = 113;
 const VR_OFFSET_COMMITMENT_NEW: usize = 114;
 const VR_OFFSET_COMMITMENT_PREV: usize = 146;
 
@@ -127,6 +129,9 @@ const PC_LEN_WITH_VALIDATOR_PUBKEY: usize = 109;
 const PC_OFFSET_CURRENT_PROJECTION_VERSION: usize = 109;
 const PC_OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION: usize = 111;
 const PC_LEN_WITH_PROJECTION_POLICY: usize = 113;
+const PC_OFFSET_SECONDARY_VALIDATOR_PUBKEY: usize = 145;
+const PC_OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL: usize = 177;
+const PC_LEN_WITH_ROLLOVER: usize = 185;
 
 const RECEIPT_V1_MESSAGE_LEN: usize = 72;
 const RECEIPT_V2_MESSAGE_LEN: usize = 103;
@@ -136,6 +141,9 @@ const RECEIPT_V2_DOMAIN: &[u8; 28] = b"entros-validator-receipt-v2\0";
 /// under two layouts.
 const RECEIPT_V3_MESSAGE_LEN: usize = 136;
 const RECEIPT_V3_DOMAIN: &[u8; 28] = b"entros-validator-receipt-v3\0";
+const RECEIPT_V4_PREIMAGE_LEN: usize = 136;
+const RECEIPT_V4_DIGEST_LEN: usize = 32;
+const RECEIPT_V4_DOMAIN: &[u8; 28] = b"entros-validator-receipt-v4\0";
 /// 0 open, 1 bound, 2 attested.
 const MAX_ASSURANCE_TIER: u8 = 2;
 
@@ -146,12 +154,68 @@ struct ReceiptSession {
     assurance_tier: u8,
 }
 
+/// Compact instruction arguments reconstructed into the v4 update receipt preimage on-chain.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UpdateReceiptArgs {
+    pub validated_at: i64,
+    pub assurance_tier: u8,
+    pub session_final_digest: Option<[u8; 32]>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 enum ReceiptPurpose {
     Mint = 1,
     Rebaseline = 2,
     Reset = 3,
+    Update = 4,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ValidatorKeyPolicy {
+    primary: [u8; 32],
+    secondary: [u8; 32],
+    secondary_valid_until: i64,
+}
+
+impl ValidatorKeyPolicy {
+    fn is_configured(&self) -> bool {
+        self.primary != [0u8; 32]
+    }
+
+    fn accepts(&self, signed_pubkey: &[u8], now: i64) -> bool {
+        if signed_pubkey == self.primary {
+            return true;
+        }
+        self.secondary != [0u8; 32]
+            && now <= self.secondary_valid_until
+            && signed_pubkey == self.secondary
+    }
+}
+
+fn read_validator_key_policy(data: &[u8]) -> ValidatorKeyPolicy {
+    let mut primary = [0u8; 32];
+    if data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
+        primary.copy_from_slice(&data[PC_OFFSET_VALIDATOR_PUBKEY..PC_OFFSET_VALIDATOR_PUBKEY + 32]);
+    }
+    let mut secondary = [0u8; 32];
+    let mut secondary_valid_until = 0i64;
+    if data.len() >= PC_LEN_WITH_ROLLOVER {
+        secondary.copy_from_slice(
+            &data[PC_OFFSET_SECONDARY_VALIDATOR_PUBKEY..PC_OFFSET_SECONDARY_VALIDATOR_PUBKEY + 32],
+        );
+        if let Ok(bytes) = data[PC_OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL
+            ..PC_OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL + 8]
+            .try_into()
+        {
+            secondary_valid_until = i64::from_le_bytes(bytes);
+        }
+    }
+    ValidatorKeyPolicy {
+        primary,
+        secondary,
+        secondary_valid_until,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,24 +332,21 @@ fn isqrt(n: u64) -> u64 {
 ///
 /// Solana verifies the signature before this instruction runs. This helper
 /// verifies that the signed payload matches the requested state transition.
-fn verify_validator_receipt(
+fn load_preceding_ed25519_receipt(
     instructions_sysvar: &AccountInfo,
-    validator_pubkey: &[u8; 32],
-    expected_wallet: &Pubkey,
-    expected_commitment: &[u8; 32],
-    expected_purpose: ReceiptPurpose,
-    expected_projection_version: u16,
+    validator_keys: &ValidatorKeyPolicy,
+    allowed_sizes: &[usize],
     now: i64,
-) -> Result<Option<ReceiptSession>> {
+) -> Result<Vec<u8>> {
     use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 
-    // Fail closed: an all-zero `validator_pubkey` means ProtocolConfig has no
+    // Fail closed: an all-zero primary `validator_pubkey` means ProtocolConfig has no
     // validator configured. A legacy 77-byte account or a fresh
-    // deployment whose validator was never set. Rather than mint without a
+    // deployment whose validator was never set. Rather than proceed without a
     // verified receipt, reject. `entros_registry::initialize_protocol` now
     // writes a non-zero pubkey atomically at creation and rejects zero, so a
     // correctly-initialized deployment never reaches this branch.
-    if validator_pubkey == &[0u8; 32] {
+    if !validator_keys.is_configured() {
         msg!("RECEIPT: validator_pubkey not configured; rejecting (fail closed)");
         return Err(EntrosAnchorError::ValidatorNotConfigured.into());
     }
@@ -371,29 +432,170 @@ fn verify_validator_receipt(
         msg!("RECEIPT: Ed25519 ix offsets exceed data length");
         return Err(EntrosAnchorError::MalformedReceiptMessage.into());
     }
-    if message_size != RECEIPT_V1_MESSAGE_LEN
-        && message_size != RECEIPT_V2_MESSAGE_LEN
-        && message_size != RECEIPT_V3_MESSAGE_LEN
-    {
-        msg!("RECEIPT: unsupported message size {}", message_size,);
+    if !allowed_sizes.contains(&message_size) {
+        msg!("RECEIPT: unsupported message size {}", message_size);
         return Err(EntrosAnchorError::MalformedReceiptMessage.into());
     }
 
     let signed_pubkey = &data[pubkey_offset..pubkey_offset + 32];
-    if signed_pubkey != validator_pubkey {
-        msg!("RECEIPT: signing pubkey does not match ProtocolConfig.validator_pubkey");
+    if !validator_keys.accepts(signed_pubkey, now) {
+        msg!("RECEIPT: signing pubkey does not match active or grace-window validator_pubkey");
         return Err(EntrosAnchorError::ReceiptValidatorMismatch.into());
     }
 
-    let message = &data[message_offset..message_offset + message_size];
+    Ok(data[message_offset..message_offset + message_size].to_vec())
+}
+
+fn verify_validator_receipt(
+    instructions_sysvar: &AccountInfo,
+    validator_keys: &ValidatorKeyPolicy,
+    expected_wallet: &Pubkey,
+    expected_commitment: &[u8; 32],
+    expected_purpose: ReceiptPurpose,
+    expected_projection_version: u16,
+    now: i64,
+) -> Result<Option<ReceiptSession>> {
+    let message = load_preceding_ed25519_receipt(
+        instructions_sysvar,
+        validator_keys,
+        &[
+            RECEIPT_V1_MESSAGE_LEN,
+            RECEIPT_V2_MESSAGE_LEN,
+            RECEIPT_V3_MESSAGE_LEN,
+        ],
+        now,
+    )?;
     verify_receipt_payload(
-        message,
+        &message,
         expected_wallet,
         expected_commitment,
         expected_purpose,
         expected_projection_version,
         now,
     )
+}
+
+fn build_update_receipt_v4_preimage(
+    wallet: &Pubkey,
+    commitment_new: &[u8; 32],
+    projection_version: u16,
+    receipt: UpdateReceiptArgs,
+) -> Result<[u8; RECEIPT_V4_PREIMAGE_LEN]> {
+    require!(
+        receipt.assurance_tier <= MAX_ASSURANCE_TIER,
+        EntrosAnchorError::InvalidAssuranceTier
+    );
+    if let Some(digest) = receipt.session_final_digest {
+        require!(
+            digest != [0u8; 32],
+            EntrosAnchorError::MalformedReceiptMessage
+        );
+    }
+    let mut preimage = [0u8; RECEIPT_V4_PREIMAGE_LEN];
+    preimage[0..28].copy_from_slice(RECEIPT_V4_DOMAIN);
+    preimage[28] = ReceiptPurpose::Update as u8;
+    preimage[29..31].copy_from_slice(&projection_version.to_le_bytes());
+    preimage[31..63].copy_from_slice(wallet.as_ref());
+    preimage[63..95].copy_from_slice(commitment_new);
+    preimage[95..103].copy_from_slice(&receipt.validated_at.to_le_bytes());
+    if let Some(digest) = receipt.session_final_digest {
+        preimage[103..135].copy_from_slice(&digest);
+    }
+    preimage[135] = receipt.assurance_tier;
+    Ok(preimage)
+}
+
+fn compute_update_receipt_v4_digest(
+    wallet: &Pubkey,
+    commitment_new: &[u8; 32],
+    projection_version: u16,
+    receipt: UpdateReceiptArgs,
+) -> Result<[u8; RECEIPT_V4_DIGEST_LEN]> {
+    let preimage =
+        build_update_receipt_v4_preimage(wallet, commitment_new, projection_version, receipt)?;
+    Ok(entros_proof_request::account_hash(&preimage))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_update_receipt_digest(
+    instructions_sysvar: &AccountInfo,
+    validator_keys: &ValidatorKeyPolicy,
+    expected_wallet: &Pubkey,
+    expected_commitment_new: &[u8; 32],
+    expected_projection_version: u16,
+    receipt: UpdateReceiptArgs,
+    now: i64,
+) -> Result<Option<ReceiptSession>> {
+    let signed_digest = load_preceding_ed25519_receipt(
+        instructions_sysvar,
+        validator_keys,
+        &[RECEIPT_V4_DIGEST_LEN],
+        now,
+    )?;
+    let expected_digest = compute_update_receipt_v4_digest(
+        expected_wallet,
+        expected_commitment_new,
+        expected_projection_version,
+        receipt,
+    )?;
+    require!(
+        signed_digest.as_slice() == expected_digest.as_slice(),
+        EntrosAnchorError::ReceiptCommitmentMismatch
+    );
+    require!(
+        receipt.validated_at <= now,
+        EntrosAnchorError::ReceiptFromFuture
+    );
+    require!(
+        now.saturating_sub(receipt.validated_at) <= MAX_RECEIPT_AGE_SECS,
+        EntrosAnchorError::ReceiptExpired
+    );
+    Ok(receipt
+        .session_final_digest
+        .map(|final_digest| ReceiptSession {
+            final_digest,
+            assurance_tier: receipt.assurance_tier,
+        }))
+}
+
+fn close_verification_result_cpi<'info>(
+    verifier_program: &AccountInfo<'info>,
+    verifier: &AccountInfo<'info>,
+    verification_result: &AccountInfo<'info>,
+    bound_nonce: Option<[u8; 32]>,
+) -> Result<()> {
+    require_keys_eq!(
+        *verifier_program.key,
+        VERIFIER_PROGRAM_ID,
+        EntrosAnchorError::InvalidVerifierProgram
+    );
+    let mut data = Vec::with_capacity(if bound_nonce.is_some() { 40 } else { 8 });
+    let ix_name: &[u8] = if bound_nonce.is_some() {
+        b"global:close_bound_verification_result"
+    } else {
+        b"global:close_verification_result"
+    };
+    let disc = entros_proof_request::account_hash(ix_name);
+    data.extend_from_slice(&disc[..8]);
+    if let Some(nonce) = bound_nonce {
+        data.extend_from_slice(&nonce);
+    }
+    let ix = anchor_lang::solana_program::instruction::Instruction {
+        program_id: VERIFIER_PROGRAM_ID,
+        accounts: vec![
+            anchor_lang::solana_program::instruction::AccountMeta::new(*verifier.key, true),
+            anchor_lang::solana_program::instruction::AccountMeta::new(
+                *verification_result.key,
+                false,
+            ),
+        ],
+        data,
+    };
+    anchor_lang::solana_program::program::invoke(
+        &ix,
+        &[verifier.clone(), verification_result.clone()],
+    )
+    .map_err(Into::into)
 }
 
 fn verify_receipt_payload(
@@ -515,12 +717,15 @@ struct AnchorUpdateAccounts<'a, 'info> {
     protocol_config: &'a UncheckedAccount<'info>,
     treasury: &'a UncheckedAccount<'info>,
     system_program: &'a Program<'info, System>,
+    instructions_sysvar: &'a UncheckedAccount<'info>,
+    verifier_program: &'a UncheckedAccount<'info>,
 }
 
-fn process_anchor_update(
-    accounts: AnchorUpdateAccounts<'_, '_>,
+fn process_anchor_update<'info>(
+    accounts: AnchorUpdateAccounts<'_, 'info>,
+    receipt: UpdateReceiptArgs,
     expected_new_commitment: Option<[u8; 32]>,
-    bound_state: Option<(&AccountInfo<'_>, [u8; 32])>,
+    bound_state: Option<&AccountInfo<'info>>,
 ) -> Result<()> {
     require!(
         bound_state.is_some() == cfg!(feature = "request-bound-v1"),
@@ -562,6 +767,9 @@ fn process_anchor_update(
         identity.owner == accounts.authority.key(),
         EntrosAnchorError::Unauthorized
     );
+    if let Some(expected) = expected_new_commitment {
+        require!(expected != [0u8; 32], EntrosAnchorError::InvalidCommitment);
+    }
 
     require!(
         accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
@@ -586,25 +794,30 @@ fn process_anchor_update(
         config_data[67],
         config_data[68],
     ]);
+    let validator_keys = read_validator_key_policy(&config_data);
     drop(config_data);
 
     let verification_info = accounts.verification_result.to_account_info();
-    require!(
-        verification_info.owner == &VERIFIER_PROGRAM_ID,
-        EntrosAnchorError::VerificationResultWrongOwner
-    );
-    let verification_data = verification_info.try_borrow_data()?;
-    let (commitment_new, commitment_prev) = if let Some((request_state, nonce)) = bound_state {
+    let (commitment_new, commitment_prev, bound_nonce) = if let Some(request_state) = bound_state {
         require!(
             cfg!(feature = "request-bound-v1"),
             EntrosAnchorError::UnsupportedProofGeneration
         );
+        if verification_info.data_is_empty() {
+            return err!(EntrosAnchorError::InvalidRequestContext);
+        }
+        require!(
+            verification_info.owner == &VERIFIER_PROGRAM_ID,
+            EntrosAnchorError::VerificationResultWrongOwner
+        );
+        let verification_data = verification_info.try_borrow_data()?;
         require!(
             verification_data.len() == BoundVerificationResult::LEN,
             EntrosAnchorError::InvalidRequestContext
         );
         let result = BoundVerificationResult::try_deserialize(&mut &verification_data[..])
             .map_err(|_| EntrosAnchorError::InvalidRequestContext)?;
+        drop(verification_data);
         let wallet = accounts.authority.key();
         let (state_key, bump) =
             Pubkey::find_program_address(&[b"proof_request_state", wallet.as_ref()], &crate::ID);
@@ -625,8 +838,23 @@ fn process_anchor_update(
             result.version == entros_proof_request::GENERATION
                 && result.wallet == wallet
                 && result.counter == counter
-                && result.nonce == nonce,
+                && result.nonce != [0u8; 32],
             EntrosAnchorError::InvalidRequestContext
+        );
+        let expected_vr_pda = Pubkey::create_program_address(
+            &[
+                b"verification_bound",
+                wallet.as_ref(),
+                result.nonce.as_ref(),
+                &[result.bump],
+            ],
+            &VERIFIER_PROGRAM_ID,
+        )
+        .map_err(|_| error!(EntrosAnchorError::InvalidVerificationResultPda))?;
+        require_keys_eq!(
+            *verification_info.key,
+            expected_vr_pda,
+            EntrosAnchorError::InvalidVerificationResultPda
         );
         require!(
             result.verified_at <= now
@@ -653,7 +881,7 @@ fn process_anchor_update(
                 VERIFIER_PROGRAM_ID,
                 crate::ID,
                 wallet,
-                nonce,
+                result.nonce,
                 &action,
             )
             .ok_or(EntrosAnchorError::InvalidRequestContext)?;
@@ -670,12 +898,21 @@ fn process_anchor_update(
             .checked_add(1)
             .ok_or(EntrosAnchorError::ArithmeticOverflow)?;
         request_state.try_borrow_mut_data()?[41..49].copy_from_slice(&next.to_le_bytes());
-        (result.commitment_new, result.commitment_prev)
+        (
+            result.commitment_new,
+            result.commitment_prev,
+            Some(result.nonce),
+        )
     } else {
         require!(
             !cfg!(feature = "request-bound-v1"),
             EntrosAnchorError::UnsupportedProofGeneration
         );
+        require!(
+            verification_info.owner == &VERIFIER_PROGRAM_ID,
+            EntrosAnchorError::VerificationResultWrongOwner
+        );
+        let verification_data = verification_info.try_borrow_data()?;
         require!(
             verification_data.len() >= VERIFICATION_RESULT_LEN_V2,
             EntrosAnchorError::StaleVerificationResult
@@ -692,6 +929,30 @@ fn process_anchor_update(
         require!(
             Pubkey::new_from_array(verifier_bytes) == accounts.authority.key(),
             EntrosAnchorError::VerifierMismatch
+        );
+
+        let nonce: [u8; 32] = verification_data[VR_OFFSET_NONCE..VR_OFFSET_NONCE + 32]
+            .try_into()
+            .map_err(|_| error!(EntrosAnchorError::InvalidVerificationResultPda))?;
+        require!(
+            nonce != [0u8; 32],
+            EntrosAnchorError::InvalidVerificationResultPda
+        );
+        let bump = verification_data[VR_OFFSET_BUMP];
+        let expected_vr_pda = Pubkey::create_program_address(
+            &[
+                b"verification",
+                accounts.authority.key().as_ref(),
+                nonce.as_ref(),
+                &[bump],
+            ],
+            &VERIFIER_PROGRAM_ID,
+        )
+        .map_err(|_| error!(EntrosAnchorError::InvalidVerificationResultPda))?;
+        require_keys_eq!(
+            *verification_info.key,
+            expected_vr_pda,
+            EntrosAnchorError::InvalidVerificationResultPda
         );
 
         let verified_at_bytes: [u8; 8] = verification_data
@@ -714,9 +975,8 @@ fn process_anchor_update(
             .try_into()
             .map_err(|_| error!(EntrosAnchorError::InvalidIdentityState))?;
 
-        (commitment_new, commitment_prev)
+        (commitment_new, commitment_prev, None)
     };
-    drop(verification_data);
 
     require!(
         commitment_new != [0u8; 32],
@@ -732,6 +992,31 @@ fn process_anchor_update(
         commitment_prev == identity.current_commitment,
         EntrosAnchorError::PrevCommitmentMismatch
     );
+    require!(
+        commitment_new != commitment_prev,
+        EntrosAnchorError::CommitmentUnchanged
+    );
+
+    let receipt_session = verify_update_receipt_digest(
+        accounts.instructions_sysvar,
+        &validator_keys,
+        &accounts.authority.key(),
+        &commitment_new,
+        identity.projection_version,
+        receipt,
+        now,
+    )?;
+    require!(
+        receipt.validated_at >= identity.last_verification_timestamp,
+        EntrosAnchorError::ReceiptAlreadyUsed
+    );
+
+    close_verification_result_cpi(
+        accounts.verifier_program,
+        &accounts.authority.to_account_info(),
+        &verification_info,
+        bound_nonce,
+    )?;
 
     identity.current_commitment = commitment_new;
     identity.verification_count = identity
@@ -795,6 +1080,12 @@ fn process_anchor_update(
         trust_score: identity.trust_score,
         commitment: commitment_new,
     });
+    emit_receipt_session(
+        identity.owner,
+        ReceiptPurpose::Update,
+        identity.projection_version,
+        receipt_session,
+    );
 
     Ok(())
 }
@@ -811,10 +1102,11 @@ pub mod entros_anchor {
         proof_request::prepare(ctx)
     }
 
-    pub fn update_anchor_bound(
-        ctx: Context<UpdateAnchorBound>,
-        verification_nonce: [u8; 32],
+    pub fn update_anchor_bound<'info>(
+        ctx: Context<'info, UpdateAnchorBound<'info>>,
+        receipt: UpdateReceiptArgs,
     ) -> Result<()> {
+        let proof_request_state_info = ctx.accounts.proof_request_state.to_account_info();
         process_anchor_update(
             AnchorUpdateAccounts {
                 authority: &ctx.accounts.authority,
@@ -823,12 +1115,12 @@ pub mod entros_anchor {
                 protocol_config: &ctx.accounts.protocol_config,
                 treasury: &ctx.accounts.treasury,
                 system_program: &ctx.accounts.system_program,
+                instructions_sysvar: &ctx.accounts.instructions_sysvar,
+                verifier_program: &ctx.accounts.verifier_program,
             },
+            receipt,
             None,
-            Some((
-                &ctx.accounts.proof_request_state.to_account_info(),
-                verification_nonce,
-            )),
+            Some(&proof_request_state_info),
         )
     }
 
@@ -1037,12 +1329,7 @@ pub mod entros_anchor {
         // entros-registry::set_validator_pubkey ran) trips the length
         // guard and leaves a zero pubkey, which the verify helper now
         // rejects (fail closed) rather than skipping.
-        let mut validator_pubkey = [0u8; 32];
-        if config_data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
-            validator_pubkey.copy_from_slice(
-                &config_data[PC_OFFSET_VALIDATOR_PUBKEY..PC_OFFSET_VALIDATOR_PUBKEY + 32],
-            );
-        }
+        let validator_keys = read_validator_key_policy(&config_data);
         drop(config_data);
 
         // Receipt binding is enforced and fails closed. Receipt verification
@@ -1053,7 +1340,7 @@ pub mod entros_anchor {
         let now = Clock::get()?.unix_timestamp;
         let receipt_session = verify_validator_receipt(
             &ctx.accounts.instructions_sysvar,
-            &validator_pubkey,
+            &validator_keys,
             &ctx.accounts.user.key(),
             &initial_commitment,
             ReceiptPurpose::Mint,
@@ -1375,16 +1662,15 @@ pub mod entros_anchor {
     /// trust-score farming via per-call fee payment, which contradicts the
     /// protocol's economic deterrence model.
     ///
-    /// The `verification_nonce` argument supplies the challenge nonce used to
-    /// derive the VerificationResult PDA (`seeds = [b"verification", authority, nonce]`).
-    /// Single-use is enforced implicitly: after this call, `current_commitment`
-    /// rotates to `new_commitment`, so the consumed VerificationResult's
-    /// `commitment_prev` no longer matches on any future call.
-    #[allow(unused_variables)] // nonce is consumed via the #[instruction] seeds constraint
-    pub fn update_anchor(
-        ctx: Context<UpdateAnchor>,
+    /// The `receipt` argument supplies the validator receipt parameters used to
+    /// verify the preceding Ed25519 signature over the v4 update receipt digest.
+    /// Single-use is enforced both by closing `verification_result` via CPI
+    /// to `entros-verifier` and by advancing `current_commitment` and
+    /// `last_verification_timestamp`.
+    pub fn update_anchor<'info>(
+        ctx: Context<'info, UpdateAnchor<'info>>,
         new_commitment: [u8; 32],
-        verification_nonce: [u8; 32],
+        receipt: UpdateReceiptArgs,
     ) -> Result<()> {
         require!(
             new_commitment != [0u8; 32],
@@ -1398,17 +1684,19 @@ pub mod entros_anchor {
                 protocol_config: &ctx.accounts.protocol_config,
                 treasury: &ctx.accounts.treasury,
                 system_program: &ctx.accounts.system_program,
+                instructions_sysvar: &ctx.accounts.instructions_sysvar,
+                verifier_program: &ctx.accounts.verifier_program,
             },
+            receipt,
             Some(new_commitment),
             None,
         )
     }
 
     /// Update the identity state using the commitment bound to the proof.
-    #[allow(unused_variables)] // nonce is consumed via the #[instruction] seeds constraint
-    pub fn update_anchor_compact(
-        ctx: Context<UpdateAnchorCompact>,
-        verification_nonce: [u8; 32],
+    pub fn update_anchor_compact<'info>(
+        ctx: Context<'info, UpdateAnchorCompact<'info>>,
+        receipt: UpdateReceiptArgs,
     ) -> Result<()> {
         process_anchor_update(
             AnchorUpdateAccounts {
@@ -1418,7 +1706,10 @@ pub mod entros_anchor {
                 protocol_config: &ctx.accounts.protocol_config,
                 treasury: &ctx.accounts.treasury,
                 system_program: &ctx.accounts.system_program,
+                instructions_sysvar: &ctx.accounts.instructions_sysvar,
+                verifier_program: &ctx.accounts.verifier_program,
             },
+            receipt,
             None,
             None,
         )
@@ -1442,7 +1733,7 @@ pub mod entros_anchor {
     /// - Verification fee charged, matching mint/update economics.
     ///
     /// Reset does not consume a ZK comparison proof because the client cannot
-    /// recover its prior fingerprint. Versioned projections require a fresh
+    /// recover its prior fingerprint. Every projection version requires a fresh
     /// validator receipt bound to this wallet, commitment, and reset purpose.
     pub fn reset_identity_state<'info>(
         ctx: Context<'info, ResetIdentityState<'info>>,
@@ -1528,7 +1819,7 @@ pub mod entros_anchor {
             ctx.accounts.protocol_config.owner == &REGISTRY_PROGRAM_ID,
             EntrosAnchorError::InvalidProtocolConfig
         );
-        let (verification_fee, projection_policy, validator_pubkey) = {
+        let (verification_fee, projection_policy, validator_keys) = {
             let config_data = ctx.accounts.protocol_config.try_borrow_data()?;
             let projection_policy = read_projection_policy(&config_data)?;
             let verification_fee = if config_data.len() >= 69 {
@@ -1545,43 +1836,30 @@ pub mod entros_anchor {
             } else {
                 0
             };
-            let mut validator_pubkey = [0u8; 32];
-            if config_data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
-                validator_pubkey.copy_from_slice(
-                    &config_data[PC_OFFSET_VALIDATOR_PUBKEY..PC_OFFSET_VALIDATOR_PUBKEY + 32],
-                );
-            }
-            (verification_fee, projection_policy, validator_pubkey)
+            let validator_keys = read_validator_key_policy(&config_data);
+            (verification_fee, projection_policy, validator_keys)
         };
         validate_requested_projection(projection_version, projection_policy)?;
 
-        let receipt_session = if projection_policy.current > 0 {
-            require!(
-                receipt_accounts.len() == 1,
-                EntrosAnchorError::InvalidResetReceiptAccounts
-            );
-            let instructions_sysvar = &receipt_accounts[0];
-            require_keys_eq!(
-                *instructions_sysvar.key,
-                solana_instructions_sysvar::id(),
-                EntrosAnchorError::InvalidResetReceiptAccounts
-            );
-            verify_validator_receipt(
-                instructions_sysvar,
-                &validator_pubkey,
-                &ctx.accounts.authority.key(),
-                &new_commitment,
-                ReceiptPurpose::Reset,
-                projection_policy.current,
-                now,
-            )?
-        } else {
-            require!(
-                receipt_accounts.is_empty(),
-                EntrosAnchorError::InvalidResetReceiptAccounts
-            );
-            None
-        };
+        require!(
+            receipt_accounts.len() == 1,
+            EntrosAnchorError::InvalidResetReceiptAccounts
+        );
+        let instructions_sysvar = &receipt_accounts[0];
+        require_keys_eq!(
+            *instructions_sysvar.key,
+            solana_instructions_sysvar::id(),
+            EntrosAnchorError::InvalidResetReceiptAccounts
+        );
+        let receipt_session = verify_validator_receipt(
+            instructions_sysvar,
+            &validator_keys,
+            &ctx.accounts.authority.key(),
+            &new_commitment,
+            ReceiptPurpose::Reset,
+            projection_policy.current,
+            now,
+        )?;
 
         identity.current_commitment = new_commitment;
         identity.verification_count = 0;
@@ -1754,12 +2032,7 @@ pub mod entros_anchor {
         } else {
             0
         };
-        let mut validator_pubkey = [0u8; 32];
-        if config_data.len() >= PC_LEN_WITH_VALIDATOR_PUBKEY {
-            validator_pubkey.copy_from_slice(
-                &config_data[PC_OFFSET_VALIDATOR_PUBKEY..PC_OFFSET_VALIDATOR_PUBKEY + 32],
-            );
-        }
+        let validator_keys = read_validator_key_policy(&config_data);
         drop(config_data);
         validate_requested_projection(projection_version, projection_policy)?;
 
@@ -1776,7 +2049,7 @@ pub mod entros_anchor {
 
         let receipt_session = verify_validator_receipt(
             &ctx.accounts.instructions_sysvar,
-            &validator_pubkey,
+            &validator_keys,
             &ctx.accounts.authority.key(),
             &new_commitment,
             ReceiptPurpose::Rebaseline,
@@ -1994,7 +2267,6 @@ pub struct MintAnchor<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(new_commitment: [u8; 32], verification_nonce: [u8; 32])]
 pub struct UpdateAnchor<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -2009,16 +2281,10 @@ pub struct UpdateAnchor<'info> {
     )]
     pub identity_state: UncheckedAccount<'info>,
 
-    /// CHECK: Cross-program read of entros-verifier VerificationResult PDA.
-    /// PDA seeds validated by Anchor; layout + owner + cross-field constraints
-    /// validated in instruction body. Binds the ZK proof to this specific
-    /// update. Without this account, update_anchor would accept any commitment
-    /// with no proof.
-    #[account(
-        seeds = [b"verification", authority.key().as_ref(), verification_nonce.as_ref()],
-        bump,
-        seeds::program = VERIFIER_PROGRAM_ID,
-    )]
+    /// CHECK: Cross-program read and atomic close of entros-verifier VerificationResult PDA.
+    /// Owner, discriminator, verifier, nonce, canonical PDA address, and freshness are
+    /// verified in `process_anchor_update` before closing via CPI to `entros-verifier`.
+    #[account(mut)]
     pub verification_result: UncheckedAccount<'info>,
 
     /// CHECK: Cross-program read of entros-registry ProtocolConfig PDA.
@@ -2040,10 +2306,17 @@ pub struct UpdateAnchor<'info> {
     pub treasury: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Solana instructions sysvar used to inspect the preceding Ed25519 receipt instruction.
+    #[account(address = solana_instructions_sysvar::id())]
+    pub instructions_sysvar: UncheckedAccount<'info>,
+
+    /// CHECK: Canonical Entros Verifier program invoked to atomically close VerificationResult.
+    #[account(address = VERIFIER_PROGRAM_ID @ EntrosAnchorError::InvalidVerifierProgram)]
+    pub verifier_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
-#[instruction(verification_nonce: [u8; 32])]
 pub struct UpdateAnchorCompact<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -2056,12 +2329,9 @@ pub struct UpdateAnchorCompact<'info> {
     )]
     pub identity_state: UncheckedAccount<'info>,
 
-    /// CHECK: The verifier program and nonce derive this read-only result PDA.
-    #[account(
-        seeds = [b"verification", authority.key().as_ref(), verification_nonce.as_ref()],
-        bump,
-        seeds::program = VERIFIER_PROGRAM_ID,
-    )]
+    /// CHECK: Owner, discriminator, verifier, nonce, canonical PDA address, and freshness are
+    /// verified in `process_anchor_update` before closing via CPI to `entros-verifier`.
+    #[account(mut)]
     pub verification_result: UncheckedAccount<'info>,
 
     /// CHECK: The registry program derives and owns this read-only config PDA.
@@ -2082,10 +2352,17 @@ pub struct UpdateAnchorCompact<'info> {
     pub treasury: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Solana instructions sysvar used to inspect the preceding Ed25519 receipt instruction.
+    #[account(address = solana_instructions_sysvar::id())]
+    pub instructions_sysvar: UncheckedAccount<'info>,
+
+    /// CHECK: Canonical Entros Verifier program invoked to atomically close VerificationResult.
+    #[account(address = VERIFIER_PROGRAM_ID @ EntrosAnchorError::InvalidVerifierProgram)]
+    pub verifier_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
-#[instruction(verification_nonce: [u8; 32])]
 pub struct UpdateAnchorBound<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -2102,12 +2379,9 @@ pub struct UpdateAnchorBound<'info> {
     #[account(mut, seeds = [b"proof_request_state", authority.key().as_ref()], bump, owner = crate::ID)]
     pub proof_request_state: UncheckedAccount<'info>,
 
-    /// CHECK: The verifier program and nonce derive this read-only result PDA.
-    #[account(
-        seeds = [b"verification_bound", authority.key().as_ref(), verification_nonce.as_ref()],
-        bump,
-        seeds::program = VERIFIER_PROGRAM_ID,
-    )]
+    /// CHECK: Owner, layout, wallet, counter, nonce, canonical PDA address, and digest are
+    /// verified in `process_anchor_update` before closing via CPI to `entros-verifier`.
+    #[account(mut)]
     pub verification_result: UncheckedAccount<'info>,
 
     /// CHECK: The registry program derives and owns this read-only config PDA.
@@ -2128,6 +2402,14 @@ pub struct UpdateAnchorBound<'info> {
     pub treasury: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Solana instructions sysvar used to inspect the preceding Ed25519 receipt instruction.
+    #[account(address = solana_instructions_sysvar::id())]
+    pub instructions_sysvar: UncheckedAccount<'info>,
+
+    /// CHECK: Canonical Entros Verifier program invoked to atomically close VerificationResult.
+    #[account(address = VERIFIER_PROGRAM_ID @ EntrosAnchorError::InvalidVerifierProgram)]
+    pub verifier_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -2714,5 +2996,119 @@ mod tests {
             &commitment,
             validated_at - 1
         ));
+    }
+
+    #[test]
+    fn update_receipt_v4_preimage_and_digest_bind_every_field() {
+        let wallet = Pubkey::new_unique();
+        let commitment_new = [11u8; 32];
+        let digest = [22u8; 32];
+        let base_args = super::UpdateReceiptArgs {
+            validated_at: T0,
+            assurance_tier: 1,
+            session_final_digest: Some(digest),
+        };
+        let preimage =
+            super::build_update_receipt_v4_preimage(&wallet, &commitment_new, 1, base_args)
+                .expect("valid v4 preimage");
+        assert_eq!(&preimage[0..28], super::RECEIPT_V4_DOMAIN);
+        assert_eq!(preimage[28], ReceiptPurpose::Update as u8);
+        assert_eq!(&preimage[103..135], &digest);
+        assert_eq!(preimage[135], 1);
+
+        let base_hash =
+            super::compute_update_receipt_v4_digest(&wallet, &commitment_new, 1, base_args)
+                .expect("base hash");
+
+        let wrong_wallet = super::compute_update_receipt_v4_digest(
+            &Pubkey::new_unique(),
+            &commitment_new,
+            1,
+            base_args,
+        )
+        .expect("wrong wallet");
+        assert_ne!(base_hash, wrong_wallet);
+
+        let wrong_commitment =
+            super::compute_update_receipt_v4_digest(&wallet, &[12u8; 32], 1, base_args)
+                .expect("wrong commitment");
+        assert_ne!(base_hash, wrong_commitment);
+
+        let wrong_projection =
+            super::compute_update_receipt_v4_digest(&wallet, &commitment_new, 2, base_args)
+                .expect("wrong projection");
+        assert_ne!(base_hash, wrong_projection);
+
+        let wrong_timestamp = super::compute_update_receipt_v4_digest(
+            &wallet,
+            &commitment_new,
+            1,
+            super::UpdateReceiptArgs {
+                validated_at: T0 + 1,
+                ..base_args
+            },
+        )
+        .expect("wrong timestamp");
+        assert_ne!(base_hash, wrong_timestamp);
+
+        let no_session = super::compute_update_receipt_v4_digest(
+            &wallet,
+            &commitment_new,
+            1,
+            super::UpdateReceiptArgs {
+                session_final_digest: None,
+                ..base_args
+            },
+        )
+        .expect("no session");
+        assert_ne!(base_hash, no_session);
+
+        assert!(super::build_update_receipt_v4_preimage(
+            &wallet,
+            &commitment_new,
+            1,
+            super::UpdateReceiptArgs {
+                assurance_tier: super::MAX_ASSURANCE_TIER + 1,
+                ..base_args
+            },
+        )
+        .is_err());
+
+        assert!(super::build_update_receipt_v4_preimage(
+            &wallet,
+            &commitment_new,
+            1,
+            super::UpdateReceiptArgs {
+                session_final_digest: Some([0u8; 32]),
+                ..base_args
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn validator_key_policy_enforces_grace_window_and_fail_closed() {
+        let mut config_data = [0u8; super::PC_LEN_WITH_ROLLOVER];
+        let empty = super::read_validator_key_policy(&config_data);
+        assert!(!empty.is_configured());
+        assert!(!empty.accepts(&[1u8; 32], T0));
+
+        let primary = [3u8; 32];
+        let secondary = [4u8; 32];
+        config_data[super::PC_OFFSET_VALIDATOR_PUBKEY..super::PC_OFFSET_VALIDATOR_PUBKEY + 32]
+            .copy_from_slice(&primary);
+        config_data[super::PC_OFFSET_SECONDARY_VALIDATOR_PUBKEY
+            ..super::PC_OFFSET_SECONDARY_VALIDATOR_PUBKEY + 32]
+            .copy_from_slice(&secondary);
+        config_data[super::PC_OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL
+            ..super::PC_OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL + 8]
+            .copy_from_slice(&(T0 + 600).to_le_bytes());
+
+        let policy = super::read_validator_key_policy(&config_data);
+        assert!(policy.is_configured());
+        assert!(policy.accepts(&primary, T0));
+        assert!(policy.accepts(&secondary, T0 + 600));
+        assert!(!policy.accepts(&secondary, T0 + 601));
+        assert!(!policy.accepts(&[9u8; 32], T0));
     }
 }
