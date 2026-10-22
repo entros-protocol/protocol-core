@@ -66,6 +66,15 @@ async function main() {
   const BASE_TRUST_INCREMENT = 100;
   const VERIFICATION_FEE = new anchor.BN(5_000_000); // 0.005 SOL
 
+  const setProjectionVersionsIx = await program.methods
+    .setProjectionVersions(1, 1)
+    .accountsPartial({
+      admin: admin.publicKey,
+      protocolConfig: protocolConfigPda,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
   const tx = await program.methods
     .initializeProtocol(
       MIN_STAKE,
@@ -80,6 +89,7 @@ async function main() {
       protocolConfig: protocolConfigPda,
       systemProgram: SystemProgram.programId,
     })
+    .postInstructions([setProjectionVersionsIx])
     .rpc();
 
   console.log(`ProtocolConfig initialized: ${tx}`);

@@ -6,7 +6,7 @@ pub struct ProtocolConfig {
     pub admin: Pubkey,
     /// Minimum SOL lamports to stake as a validator
     pub min_stake: u64,
-    /// Seconds until a challenge nonce expires
+    /// Legacy challenge expiry window in seconds (retained for ProtocolConfig layout stability)
     pub challenge_expiry: i64,
     /// Maximum achievable trust score (e.g. 10000 = 100.00%)
     pub max_trust_score: u16,
@@ -29,10 +29,16 @@ pub struct ProtocolConfig {
     pub current_projection_version: u16,
     /// Oldest projection version accepted by normal verification updates.
     pub minimum_supported_projection_version: u16,
+    /// Pending authority proposed by the current admin in a two-step transfer.
+    pub pending_authority: Pubkey,
+    /// Previous validator pubkey accepted during grace-window key rollover.
+    pub secondary_validator_pubkey: Pubkey,
+    /// Unix timestamp through which `secondary_validator_pubkey` remains valid.
+    pub secondary_validator_valid_until: i64,
 }
 
 impl ProtocolConfig {
-    pub const LEN: usize = 8 // discriminator
+    pub const LEN_PRE_ROLLOVER: usize = 8 // discriminator
         + 32  // admin
         + 8   // min_stake
         + 8   // challenge_expiry
@@ -44,11 +50,19 @@ impl ProtocolConfig {
         + 32  // validator_pubkey
         + 2   // current_projection_version
         + 2; // minimum_supported_projection_version
+    pub const LEN: usize = Self::LEN_PRE_ROLLOVER
+        + 32  // pending_authority
+        + 32  // secondary_validator_pubkey
+        + 8; // secondary_validator_valid_until
     /// Byte offset of `validator_pubkey` in the serialised account.
     /// Used by entros-anchor for raw-byte reads.
     pub const OFFSET_VALIDATOR_PUBKEY: usize = 77;
     pub const OFFSET_CURRENT_PROJECTION_VERSION: usize = 109;
     pub const OFFSET_MINIMUM_SUPPORTED_PROJECTION_VERSION: usize = 111;
+    pub const OFFSET_PENDING_AUTHORITY: usize = 113;
+    pub const OFFSET_SECONDARY_VALIDATOR_PUBKEY: usize = 145;
+    pub const OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL: usize = 177;
+    pub const MAX_VALIDATOR_GRACE_PERIOD_SECS: i64 = 86_400;
 }
 
 #[account]

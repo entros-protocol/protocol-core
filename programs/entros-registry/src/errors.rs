@@ -30,4 +30,10 @@ pub enum RegistryError {
     ProjectionVersionRollback,
     #[msg("Minimum supported projection version cannot decrease")]
     MinimumProjectionVersionRollback,
+    #[msg("Proposed authority must be non-zero")]
+    InvalidPendingAuthority,
+    #[msg("No pending authority transfer to accept")]
+    NoPendingAuthority,
+    #[msg("Validator rotation grace period must be between 0 and 86400 seconds")]
+    InvalidValidatorGracePeriod,
 }

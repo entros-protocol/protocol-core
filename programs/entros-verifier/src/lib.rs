@@ -3,6 +3,7 @@
 #![allow(unexpected_cfgs)] // Anchor emits SBF-only cfg values during host builds.
 
 use anchor_lang::prelude::*;
+#[cfg(not(feature = "no-entrypoint"))]
 use solana_security_txt::security_txt;
 
 mod bound;
@@ -20,6 +21,7 @@ use state::{Challenge, VerificationResult};
 
 entros_proof_request::declare_verifier_program_id!();
 
+#[cfg(not(feature = "no-entrypoint"))]
 security_txt! {
     name: "Entros Verifier",
     project_url: "https://entros.io",
@@ -28,7 +30,7 @@ security_txt! {
     source_code: "https://github.com/entros-protocol/protocol-core"
 }
 
-/// Challenge expiry in seconds (5 minutes).
+/// Legacy challenge expiry in seconds (5 minutes), retained for standalone challenge instruction compatibility.
 const DEFAULT_CHALLENGE_EXPIRY: i64 = 300;
 
 /// Highest Hamming threshold input accepted by this program.
@@ -69,9 +71,7 @@ pub mod entros_verifier {
         Ok(())
     }
 
-    /// Verify a proof against a challenge.
-    /// Validates the challenge is unused and not expired, runs mock verification,
-    /// and stores the result.
+    /// Verify a proof and store the result PDA keyed by `(verifier, nonce)`.
     pub fn verify_proof(
         ctx: Context<VerifyProof>,
         proof_bytes: Vec<u8>,
@@ -83,7 +83,6 @@ pub mod entros_verifier {
             .map_err(|_| VerifierError::InvalidPublicInputs)?;
         verify_and_store(
             &ctx.accounts.verifier,
-            &mut ctx.accounts.challenge,
             &mut ctx.accounts.verification_result,
             &proof_bytes,
             &public_inputs,
@@ -110,7 +109,6 @@ pub mod entros_verifier {
         ];
         verify_and_store(
             &ctx.accounts.verifier,
-            &mut ctx.accounts.challenge,
             &mut ctx.accounts.verification_result,
             &proof_bytes,
             &public_inputs,
@@ -162,7 +160,6 @@ pub mod entros_verifier {
 
 fn verify_and_store<'info>(
     verifier: &Signer<'info>,
-    challenge: &mut Account<'info, Challenge>,
     result: &mut Account<'info, VerificationResult>,
     proof_bytes: &[u8],
     public_inputs: &[[u8; 32]; 4],
@@ -173,11 +170,8 @@ fn verify_and_store<'info>(
         !cfg!(feature = "request-bound-v1"),
         VerifierError::UnsupportedProofGeneration
     );
+    require!(nonce != [0u8; 32], VerifierError::InvalidNonce);
     let now = Clock::get()?.unix_timestamp;
-
-    require!(!challenge.used, VerifierError::ChallengeAlreadyUsed);
-    require!(now < challenge.expires_at, VerifierError::ChallengeExpired);
-    challenge.used = true;
 
     require!(
         public_inputs[0] != [0u8; 32],
@@ -246,14 +240,6 @@ pub struct VerifyProof<'info> {
     pub verifier: Signer<'info>,
 
     #[account(
-        mut,
-        seeds = [b"challenge", verifier.key().as_ref(), nonce.as_ref()],
-        bump = challenge.bump,
-        constraint = challenge.challenger == verifier.key(),
-    )]
-    pub challenge: Account<'info, Challenge>,
-
-    #[account(
         init,
         payer = verifier,
         space = VerificationResult::LEN,
@@ -270,14 +256,6 @@ pub struct VerifyProof<'info> {
 pub struct VerifyProofCompact<'info> {
     #[account(mut)]
     pub verifier: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [b"challenge", verifier.key().as_ref(), nonce.as_ref()],
-        bump = challenge.bump,
-        constraint = challenge.challenger == verifier.key(),
-    )]
-    pub challenge: Account<'info, Challenge>,
 
     #[account(
         init,
@@ -300,7 +278,6 @@ pub struct CloseChallenge<'info> {
         mut,
         close = challenger,
         constraint = challenge.challenger == challenger.key(),
-        constraint = challenge.used @ VerifierError::ChallengeNotUsed,
     )]
     pub challenge: Account<'info, Challenge>,
 }

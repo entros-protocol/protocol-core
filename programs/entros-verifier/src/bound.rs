@@ -1,4 +1,4 @@
-use crate::{errors::VerifierError, state::Challenge};
+use crate::errors::VerifierError;
 use anchor_lang::prelude::*;
 #[cfg(feature = "request-bound-v1")]
 use entros_proof_request::{read_counter, Action, GENERATION};
@@ -14,8 +14,6 @@ mod key {
 pub struct VerifyProofBound<'info> {
     #[account(mut)]
     pub verifier: Signer<'info>,
-    #[account(mut, seeds = [b"challenge", verifier.key().as_ref(), nonce.as_ref()], bump = challenge.bump, constraint = challenge.challenger == verifier.key())]
-    pub challenge: Account<'info, Challenge>,
     #[account(init, payer = verifier, space = BoundVerificationResult::LEN, seeds = [b"verification_bound", verifier.key().as_ref(), nonce.as_ref()], bump)]
     pub verification_result: Account<'info, BoundVerificationResult>,
     /// CHECK: The owner, discriminator, layout and wallet relation are checked before hashing.
@@ -71,23 +69,16 @@ pub fn verify(
             digest_limbs, request_digest, DEPLOYMENT_DOMAIN, MAX_REQUEST_LIFETIME,
         };
         use groth16_solana::groth16::Groth16Verifier;
+        require!(nonce != [0u8; 32], VerifierError::InvalidNonce);
         let now = Clock::get()?.unix_timestamp;
         let now_u64 = u64::try_from(now).map_err(|_| VerifierError::ChallengeExpired)?;
         require!(
-            !ctx.accounts.challenge.used,
-            VerifierError::ChallengeAlreadyUsed
-        );
-        require!(
-            now < ctx.accounts.challenge.expires_at
-                && valid_until >= now_u64
+            valid_until >= now_u64
                 && valid_until > 0
                 && valid_until
                     <= now_u64
                         .checked_add(MAX_REQUEST_LIFETIME)
-                        .ok_or(VerifierError::ArithmeticOverflow)?
-                && valid_until
-                    <= u64::try_from(ctx.accounts.challenge.expires_at)
-                        .map_err(|_| VerifierError::ChallengeExpired)?,
+                        .ok_or(VerifierError::ArithmeticOverflow)?,
             VerifierError::ChallengeExpired
         );
         crate::validate_hamming_bounds(threshold, min_distance)?;
@@ -183,7 +174,6 @@ pub fn verify(
             request_digest: digest,
             bump: ctx.bumps.verification_result,
         });
-        ctx.accounts.challenge.used = true;
         Ok(())
     }
 }

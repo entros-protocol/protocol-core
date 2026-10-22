@@ -30,7 +30,7 @@ fn read_projection_versions(data: &[u8]) -> Result<(u16, u16)> {
         return Ok((0, 0));
     }
     require!(
-        data.len() >= ProtocolConfig::LEN,
+        data.len() >= ProtocolConfig::LEN_PRE_ROLLOVER,
         RegistryError::InvalidProtocolConfig
     );
     let current = u16::from_le_bytes([
@@ -43,6 +43,35 @@ fn read_projection_versions(data: &[u8]) -> Result<(u16, u16)> {
     ]);
     require!(minimum <= current, RegistryError::InvalidProtocolConfig);
     Ok((current, minimum))
+}
+
+fn ensure_protocol_config_len<'info>(
+    config_info: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program_info: &AccountInfo<'info>,
+) -> Result<()> {
+    let new_len = ProtocolConfig::LEN;
+    let current_len = config_info.data_len();
+    if current_len < new_len {
+        config_info.resize(new_len)?;
+
+        let rent = Rent::get()?;
+        let required = rent.minimum_balance(new_len);
+        let current = config_info.lamports();
+        if required > current {
+            system_program::transfer(
+                CpiContext::new(
+                    system_program_info.key(),
+                    system_program::Transfer {
+                        from: payer.clone(),
+                        to: config_info.clone(),
+                    },
+                ),
+                required - current,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_projection_transition(stored: (u16, u16), next: (u16, u16)) -> Result<()> {
@@ -103,6 +132,9 @@ pub mod entros_registry {
         config.validator_pubkey = validator_pubkey;
         config.current_projection_version = 0;
         config.minimum_supported_projection_version = 0;
+        config.pending_authority = Pubkey::default();
+        config.secondary_validator_pubkey = Pubkey::default();
+        config.secondary_validator_valid_until = 0;
         Ok(())
     }
 
@@ -163,41 +195,205 @@ pub mod entros_registry {
             );
         }
 
-        // Resize to the current layout if the account predates one or more
-        // field additions. `realloc(_, true)` zero-fills the new bytes,
-        // which leaves any unset intermediate fields (e.g. migration_fee)
-        // at zero. These safe defaults match `Default::default()`.
-        let new_len = ProtocolConfig::LEN;
-        let current_len = config_info.data_len();
-        if current_len < new_len {
-            config_info.resize(new_len)?;
+        ensure_protocol_config_len(
+            config_info,
+            &ctx.accounts.admin.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
 
-            let rent = Rent::get()?;
-            let required = rent.minimum_balance(new_len);
-            let current = config_info.lamports();
-            if required > current {
-                system_program::transfer(
-                    CpiContext::new(
-                        ctx.accounts.system_program.key(),
-                        system_program::Transfer {
-                            from: ctx.accounts.admin.to_account_info(),
-                            to: config_info.to_account_info(),
-                        },
-                    ),
-                    required - current,
-                )?;
-            }
-        }
-
-        // Write validator_pubkey at its canonical offset.
+        // Write validator_pubkey at its canonical offset and clear any active
+        // grace-window secondary key on immediate rotation.
         let mut data = config_info.try_borrow_mut_data()?;
         data[ProtocolConfig::OFFSET_VALIDATOR_PUBKEY..ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32]
             .copy_from_slice(validator_pubkey.as_ref());
+        data[ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_PUBKEY
+            ..ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_PUBKEY + 32]
+            .fill(0);
+        data[ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL
+            ..ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL + 8]
+            .fill(0);
         drop(data);
 
         emit!(ValidatorPubkeySet {
             admin: ctx.accounts.admin.key(),
             validator_pubkey,
+        });
+
+        Ok(())
+    }
+
+    /// Rotate the validator signing pubkey while optionally retaining the
+    /// previous key in a bounded grace window (up to 86,400 seconds).
+    pub fn rotate_validator_pubkey(
+        ctx: Context<RotateValidatorPubkey>,
+        new_validator_pubkey: Pubkey,
+        grace_period_secs: i64,
+    ) -> Result<()> {
+        require!(
+            new_validator_pubkey != Pubkey::default(),
+            RegistryError::InvalidValidatorPubkey
+        );
+        require!(
+            (0..=ProtocolConfig::MAX_VALIDATOR_GRACE_PERIOD_SECS).contains(&grace_period_secs),
+            RegistryError::InvalidValidatorGracePeriod
+        );
+
+        let config_info = &ctx.accounts.protocol_config;
+        require_keys_eq!(
+            *config_info.owner,
+            crate::ID,
+            RegistryError::InvalidProtocolConfig
+        );
+
+        let old_validator = {
+            let data = config_info.try_borrow_data()?;
+            require!(data.len() >= 40, RegistryError::InvalidProtocolConfig);
+            let stored_admin = Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(RegistryError::InvalidProtocolConfig))?;
+            require!(
+                stored_admin == ctx.accounts.admin.key(),
+                RegistryError::Unauthorized
+            );
+            if data.len() >= ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32 {
+                Pubkey::try_from(
+                    &data[ProtocolConfig::OFFSET_VALIDATOR_PUBKEY
+                        ..ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32],
+                )
+                .map_err(|_| error!(RegistryError::InvalidProtocolConfig))?
+            } else {
+                Pubkey::default()
+            }
+        };
+
+        ensure_protocol_config_len(
+            config_info,
+            &ctx.accounts.admin.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+
+        let now = Clock::get()?.unix_timestamp;
+        let (secondary_validator_pubkey, secondary_validator_valid_until) = if grace_period_secs > 0
+            && old_validator != Pubkey::default()
+            && old_validator != new_validator_pubkey
+        {
+            let valid_until = now
+                .checked_add(grace_period_secs)
+                .ok_or(RegistryError::ArithmeticOverflow)?;
+            (old_validator, valid_until)
+        } else {
+            (Pubkey::default(), 0i64)
+        };
+
+        let mut data = config_info.try_borrow_mut_data()?;
+        data[ProtocolConfig::OFFSET_VALIDATOR_PUBKEY..ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32]
+            .copy_from_slice(new_validator_pubkey.as_ref());
+        data[ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_PUBKEY
+            ..ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_PUBKEY + 32]
+            .copy_from_slice(secondary_validator_pubkey.as_ref());
+        data[ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL
+            ..ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL + 8]
+            .copy_from_slice(&secondary_validator_valid_until.to_le_bytes());
+        drop(data);
+
+        emit!(ValidatorPubkeyRotated {
+            admin: ctx.accounts.admin.key(),
+            new_validator_pubkey,
+            secondary_validator_pubkey,
+            secondary_validator_valid_until,
+        });
+
+        Ok(())
+    }
+
+    /// Propose a new protocol authority in a two-step authority transfer.
+    pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
+        require!(
+            new_authority != Pubkey::default(),
+            RegistryError::InvalidPendingAuthority
+        );
+
+        let config_info = &ctx.accounts.protocol_config;
+        require_keys_eq!(
+            *config_info.owner,
+            crate::ID,
+            RegistryError::InvalidProtocolConfig
+        );
+
+        {
+            let data = config_info.try_borrow_data()?;
+            require!(data.len() >= 40, RegistryError::InvalidProtocolConfig);
+            let stored_admin = Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(RegistryError::InvalidProtocolConfig))?;
+            require!(
+                stored_admin == ctx.accounts.admin.key(),
+                RegistryError::Unauthorized
+            );
+        }
+
+        ensure_protocol_config_len(
+            config_info,
+            &ctx.accounts.admin.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+
+        let mut data = config_info.try_borrow_mut_data()?;
+        data[ProtocolConfig::OFFSET_PENDING_AUTHORITY
+            ..ProtocolConfig::OFFSET_PENDING_AUTHORITY + 32]
+            .copy_from_slice(new_authority.as_ref());
+        drop(data);
+
+        emit!(AuthorityTransferProposed {
+            current_admin: ctx.accounts.admin.key(),
+            pending_authority: new_authority,
+        });
+
+        Ok(())
+    }
+
+    /// Accept a proposed protocol authority transfer. Must be signed by `pending_authority`.
+    pub fn accept_authority(ctx: Context<AcceptAuthority>) -> Result<()> {
+        let config_info = &ctx.accounts.protocol_config;
+        require_keys_eq!(
+            *config_info.owner,
+            crate::ID,
+            RegistryError::InvalidProtocolConfig
+        );
+
+        let (old_admin, pending) = {
+            let data = config_info.try_borrow_data()?;
+            require!(
+                data.len() >= ProtocolConfig::OFFSET_PENDING_AUTHORITY + 32,
+                RegistryError::NoPendingAuthority
+            );
+            let old_admin = Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(RegistryError::InvalidProtocolConfig))?;
+            let pending = Pubkey::try_from(
+                &data[ProtocolConfig::OFFSET_PENDING_AUTHORITY
+                    ..ProtocolConfig::OFFSET_PENDING_AUTHORITY + 32],
+            )
+            .map_err(|_| error!(RegistryError::InvalidProtocolConfig))?;
+            (old_admin, pending)
+        };
+
+        require!(
+            pending != Pubkey::default(),
+            RegistryError::NoPendingAuthority
+        );
+        require!(
+            pending == ctx.accounts.pending_authority.key(),
+            RegistryError::Unauthorized
+        );
+
+        let mut data = config_info.try_borrow_mut_data()?;
+        data[8..40].copy_from_slice(pending.as_ref());
+        data[ProtocolConfig::OFFSET_PENDING_AUTHORITY
+            ..ProtocolConfig::OFFSET_PENDING_AUTHORITY + 32]
+            .fill(0);
+        drop(data);
+
+        emit!(AuthorityTransferAccepted {
+            old_admin,
+            new_admin: pending,
         });
 
         Ok(())
@@ -235,27 +431,11 @@ pub mod entros_registry {
             ),
         )?;
 
-        let new_len = ProtocolConfig::LEN;
-        let current_len = config_info.data_len();
-        if current_len < new_len {
-            config_info.resize(new_len)?;
-
-            let rent = Rent::get()?;
-            let required = rent.minimum_balance(new_len);
-            let current = config_info.lamports();
-            if required > current {
-                system_program::transfer(
-                    CpiContext::new(
-                        ctx.accounts.system_program.key(),
-                        system_program::Transfer {
-                            from: ctx.accounts.admin.to_account_info(),
-                            to: config_info.to_account_info(),
-                        },
-                    ),
-                    required - current,
-                )?;
-            }
-        }
+        ensure_protocol_config_len(
+            config_info,
+            &ctx.accounts.admin.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
 
         let mut data = config_info.try_borrow_mut_data()?;
         data[ProtocolConfig::OFFSET_CURRENT_PROJECTION_VERSION
@@ -625,6 +805,52 @@ pub struct SetProjectionVersions<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RotateValidatorPubkey<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// CHECK: The handler validates the PDA, owner, stored admin, and layout.
+    #[account(
+        mut,
+        seeds = [b"protocol_config"],
+        bump,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ProposeAuthority<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// CHECK: The handler validates the PDA, owner, stored admin, and layout.
+    #[account(
+        mut,
+        seeds = [b"protocol_config"],
+        bump,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AcceptAuthority<'info> {
+    #[account(mut)]
+    pub pending_authority: Signer<'info>,
+
+    /// CHECK: The handler validates the PDA, owner, and stored pending authority.
+    #[account(
+        mut,
+        seeds = [b"protocol_config"],
+        bump,
+    )]
+    pub protocol_config: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
 pub struct WithdrawTreasury<'info> {
     #[account(
         mut,
@@ -766,6 +992,26 @@ pub struct ProjectionVersionsSet {
     pub minimum_supported_projection_version: u16,
 }
 
+#[event]
+pub struct ValidatorPubkeyRotated {
+    pub admin: Pubkey,
+    pub new_validator_pubkey: Pubkey,
+    pub secondary_validator_pubkey: Pubkey,
+    pub secondary_validator_valid_until: i64,
+}
+
+#[event]
+pub struct AuthorityTransferProposed {
+    pub current_admin: Pubkey,
+    pub pending_authority: Pubkey,
+}
+
+#[event]
+pub struct AuthorityTransferAccepted {
+    pub old_admin: Pubkey,
+    pub new_admin: Pubkey,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{read_projection_versions, validate_projection_transition};
@@ -792,5 +1038,64 @@ mod tests {
     #[test]
     fn projection_window_cannot_invert() {
         assert!(validate_projection_transition((1, 0), (1, 2)).is_err());
+    }
+
+    #[test]
+    fn protocol_config_layout_offsets_match_serialized_fields() {
+        use super::ProtocolConfig;
+        use anchor_lang::prelude::Pubkey;
+        use anchor_lang::AccountSerialize;
+
+        let admin = Pubkey::new_from_array([1u8; 32]);
+        let validator = Pubkey::new_from_array([2u8; 32]);
+        let pending = Pubkey::new_from_array([3u8; 32]);
+        let secondary = Pubkey::new_from_array([4u8; 32]);
+        let config = ProtocolConfig {
+            admin,
+            min_stake: 1_000_000_000,
+            challenge_expiry: 300,
+            max_trust_score: 10_000,
+            base_trust_increment: 100,
+            bump: 254,
+            verification_fee: 5_000_000,
+            migration_fee: 5_000_000,
+            validator_pubkey: validator,
+            current_projection_version: 2,
+            minimum_supported_projection_version: 1,
+            pending_authority: pending,
+            secondary_validator_pubkey: secondary,
+            secondary_validator_valid_until: 1_700_086_400,
+        };
+        let mut bytes = Vec::new();
+        config.try_serialize(&mut bytes).expect("serialize config");
+        assert_eq!(bytes.len(), ProtocolConfig::LEN);
+        assert_eq!(
+            &bytes[ProtocolConfig::OFFSET_VALIDATOR_PUBKEY
+                ..ProtocolConfig::OFFSET_VALIDATOR_PUBKEY + 32],
+            validator.as_ref()
+        );
+        assert_eq!(
+            super::read_projection_versions(&bytes).expect("read projection versions"),
+            (2, 1)
+        );
+        assert_eq!(
+            &bytes[ProtocolConfig::OFFSET_PENDING_AUTHORITY
+                ..ProtocolConfig::OFFSET_PENDING_AUTHORITY + 32],
+            pending.as_ref()
+        );
+        assert_eq!(
+            &bytes[ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_PUBKEY
+                ..ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_PUBKEY + 32],
+            secondary.as_ref()
+        );
+        assert_eq!(
+            i64::from_le_bytes(
+                bytes[ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL
+                    ..ProtocolConfig::OFFSET_SECONDARY_VALIDATOR_VALID_UNTIL + 8]
+                    .try_into()
+                    .expect("8 bytes")
+            ),
+            1_700_086_400
+        );
     }
 }
