@@ -1,5 +1,5 @@
 /* Build the Solana programs with `anchor build` first.
-Run this suite with Node 24.15.0.
+Run this suite with Node 24.22.1.
 
 This suite verifies the separate EncryptedBaseline PDA design.
 Verifies:

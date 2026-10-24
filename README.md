@@ -23,7 +23,7 @@ Minting requires a validator-signed Ed25519 receipt. The receipt binds the walle
 ## Setup
 
 ```bash
-# Prerequisites: Rust 1.91.0, Solana CLI 3.1.10, Anchor CLI 1.1.2, Node.js 24.15.0
+# Prerequisites: Rust 1.91.0, Solana CLI 3.1.10, Anchor CLI 1.1.2, Node.js 24.22.1
 
 # Install dependencies
 npm ci

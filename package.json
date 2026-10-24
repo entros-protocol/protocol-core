@@ -2,10 +2,10 @@
   "name": "protocol-core",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "npm@11.12.1",
+  "packageManager": "npm@11.19.1",
   "engines": {
     "node": ">=24.15.0 <25",
-    "npm": "11.12.1"
+    "npm": "11.19.1"
   },
   "scripts": {
     "test": "anchor test --validator legacy",
