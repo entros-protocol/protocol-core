@@ -23,7 +23,9 @@
     "diff": "^8.0.0",
     "uuid": "^14.0.0",
     "js-yaml": "^4.3.2",
-    "brace-expansion": "^2.1.3",
+    "brace-expansion": "^2.1.7",
+    "toml": "^5.0.1",
+    "stream-json": "^3.6.0",
     "jayson": {
       "ws": "^7.5.11"
     }
