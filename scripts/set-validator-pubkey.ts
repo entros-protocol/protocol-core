@@ -30,10 +30,11 @@ async function main() {
   const adminRaw = fs.readFileSync(adminPath, "utf-8");
   const admin = Keypair.fromSecretKey(new Uint8Array(JSON.parse(adminRaw)));
 
-  const validatorRaw = fs.readFileSync(validatorPath, "utf-8");
-  const validatorPubkey = Keypair.fromSecretKey(
-    new Uint8Array(JSON.parse(validatorRaw))
-  ).publicKey;
+  const validatorPubkey = process.env.VALIDATOR_PUBKEY
+    ? new PublicKey(process.env.VALIDATOR_PUBKEY)
+    : Keypair.fromSecretKey(
+        new Uint8Array(JSON.parse(fs.readFileSync(validatorPath, "utf-8")))
+      ).publicKey;
 
   console.log(`Admin:                  ${admin.publicKey.toBase58()}`);
   console.log(`Validator pubkey:       ${validatorPubkey.toBase58()}`);
@@ -84,12 +85,12 @@ async function main() {
   if (!after) throw new Error("ProtocolConfig disappeared after tx (impossible)");
   console.log(`Account size after:     ${after.data.length} bytes`);
 
-  if (after.data.length !== 109) {
+  if (after.data.length !== 185) {
     console.warn(
-      `WARNING: expected 109 bytes after migration; got ${after.data.length}`
+      `WARNING: expected 185 bytes after migration; got ${after.data.length}`
     );
   } else {
-    console.log("✅ Account resized 77 -> 109 bytes");
+    console.log("✅ Account resized to 185 bytes");
   }
 
   // Read the validator_pubkey field at offset 77 (32 bytes).
