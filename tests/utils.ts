@@ -82,11 +82,15 @@ export function buildResetReceiptIx(
   });
 }
 
+let lastBootstrappedTimestamp = 0;
+
 export function buildUpdateReceipt(
   walletPubkey: PublicKey,
   commitment: Buffer | number[],
   projectionVersion = 0,
-  validatedAt = Math.floor(Date.now() / 1000) - 30,
+  validatedAt = lastBootstrappedTimestamp > 0
+    ? lastBootstrappedTimestamp
+    : Math.floor(Date.now() / 1000),
   assuranceTier = 0,
   sessionFinalDigest: number[] | null = null,
 ): {
@@ -298,6 +302,13 @@ export async function bootstrapVerifiedUser(params: {
     })
     .signers([user])
     .rpc();
+
+  const clockInfo = await entrosAnchor.provider.connection.getAccountInfo(
+    web3.SYSVAR_CLOCK_PUBKEY,
+  );
+  if (clockInfo && clockInfo.data.length >= 40) {
+    lastBootstrappedTimestamp = Number(clockInfo.data.readBigInt64LE(32));
+  }
 
   return { user, identityPda, mintPda, nonce, challengePda, verificationPda };
 }

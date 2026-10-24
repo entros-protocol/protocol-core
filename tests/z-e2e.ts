@@ -173,6 +173,7 @@ describe("e2e: full Entros verification flow", () => {
       e2eUser.publicKey,
       newCommitment,
       projectionVersion,
+      identity.lastVerificationTimestamp.toNumber(),
     );
     await entrosAnchor.methods
       .updateAnchor(Array.from(newCommitment), updateRec.args)
