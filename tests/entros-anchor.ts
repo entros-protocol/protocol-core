@@ -1149,6 +1149,11 @@ describe("entros-anchor", () => {
       TOKEN_2022_PROGRAM_ID,
     );
 
+    const [migrationRecordPda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("migration"), newWallet.publicKey.toBuffer()],
+      entrosAnchorProgId,
+    );
+
     await program.methods
       .migrateIdentity()
       .accountsStrict({
@@ -1166,6 +1171,7 @@ describe("entros-anchor", () => {
         identityStateOld: migrationIdentityPda,
         mintOld: migrationMintPda,
         tokenAccountOld: oldTokenAccount,
+        migrationRecord: migrationRecordPda,
       })
       .signers([newWallet])
       .rpc();

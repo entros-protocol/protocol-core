@@ -19,6 +19,7 @@ use solana_security_txt::security_txt;
 use spl_token_2022::extension::ExtensionType;
 
 mod errors;
+mod pda_account;
 mod proof_request;
 use entros_proof_request::BoundVerificationResult;
 use proof_request::*;
@@ -26,8 +27,8 @@ mod state;
 
 use errors::EntrosAnchorError;
 use state::EncryptedBaseline;
-/// Public account type for cross-program clients that read Entros Anchor state.
-pub use state::IdentityState;
+/// Public account types for cross-program clients that read Entros Anchor state.
+pub use state::{IdentityState, MigrationRecord};
 
 entros_proof_request::declare_anchor_program_id!();
 
@@ -1173,24 +1174,21 @@ pub mod entros_anchor {
         #[cfg(feature = "debug-logs")]
         msg!("space: {:?}", space); // 274
 
-        // 1. Allocate mint account with space for NonTransferable extension
+        // 1. Create the mint account. The metadata initialized below grows the
+        // account, so the rent for that final size is paid here.
         let rent = Rent::get()?;
         let lamports = rent.minimum_balance(space + meta_data_space);
 
         #[cfg(feature = "debug-logs")]
-        msg!("create_account on mint");
-        system_program::create_account(
-            CpiContext::new_with_signer(
-                ctx.accounts.system_program.key(),
-                system_program::CreateAccount {
-                    from: ctx.accounts.user.to_account_info(),
-                    to: ctx.accounts.mint.to_account_info(),
-                },
-                &[mint_seeds],
-            ),
-            lamports,
-            space as u64,
+        msg!("create the mint account");
+        pda_account::create_pda_account(
+            &ctx.accounts.user.to_account_info(),
+            &ctx.accounts.mint.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
             ctx.accounts.token_program.key,
+            space,
+            lamports,
+            mint_seeds,
         )?;
 
         // 2. Initialize NonTransferable extension (MUST be before InitializeMint2)
@@ -1449,24 +1447,21 @@ pub mod entros_anchor {
         #[cfg(feature = "debug-logs")]
         msg!("space: {:?}", space); // 274
 
-        // 1. Allocate mint account with space for NonTransferable extension
+        // 1. Create the mint account. The metadata initialized below grows the
+        // account, so the rent for that final size is paid here.
         let rent = Rent::get()?;
         let lamports = rent.minimum_balance(space + meta_data_space);
 
         #[cfg(feature = "debug-logs")]
-        msg!("create_account on mint");
-        system_program::create_account(
-            CpiContext::new_with_signer(
-                ctx.accounts.system_program.key(),
-                system_program::CreateAccount {
-                    from: ctx.accounts.user.to_account_info(),
-                    to: ctx.accounts.mint.to_account_info(),
-                },
-                &[mint_seeds],
-            ),
-            lamports,
-            space as u64,
+        msg!("create the mint account");
+        pda_account::create_pda_account(
+            &ctx.accounts.user.to_account_info(),
+            &ctx.accounts.mint.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
             ctx.accounts.token_program.key,
+            space,
+            lamports,
+            mint_seeds,
         )?;
 
         // 2. Initialize NonTransferable extension (MUST be before InitializeMint2)
@@ -1583,6 +1578,14 @@ pub mod entros_anchor {
         identity.last_reset_timestamp = identity_old.last_reset_timestamp;
         identity.projection_version = identity_old.projection_version;
         identity.last_rebaseline_timestamp = identity_old.last_rebaseline_timestamp;
+
+        // The identity keeps its history, so record when it arrived at this wallet.
+        let clock = Clock::get()?;
+        let migration_record = &mut ctx.accounts.migration_record;
+        migration_record.migrated_at = clock.unix_timestamp;
+        migration_record.migrated_slot = clock.slot;
+        migration_record.bump = ctx.bumps.migration_record;
+        migration_record.previous_wallet = identity_old.owner;
 
         // Read verification fee from protocol config (cross-program, entroRegistry)
         require!(
@@ -2200,6 +2203,15 @@ pub struct MigrateIdentity<'info> {
         associated_token::authority = wallet_old,
         associated_token::token_program = token_program)]
     pub token_account_old: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = MigrationRecord::LEN,
+        seeds = [b"migration", user.key().as_ref()],
+        bump,
+    )]
+    pub migration_record: Box<Account<'info, MigrationRecord>>,
 }
 #[derive(Accounts)]
 pub struct MintAnchor<'info> {
@@ -2582,6 +2594,30 @@ mod tests {
             super::VERIFIER_PROGRAM_ID,
             <entros_proof_request::BoundVerificationResult as anchor_lang::Owner>::owner()
         );
+    }
+
+    /// Other programs read this account by offset, so its bytes must not move.
+    #[test]
+    fn migration_record_layout_is_stable() {
+        use anchor_lang::AccountSerialize;
+
+        let record = super::MigrationRecord {
+            migrated_at: 1_762_819_200,
+            migrated_slot: 520_899_409,
+            bump: 254,
+            previous_wallet: anchor_lang::prelude::Pubkey::new_from_array([0x11; 32]),
+        };
+        let mut bytes = Vec::new();
+        record.try_serialize(&mut bytes).unwrap();
+
+        assert_eq!(bytes.len(), super::MigrationRecord::LEN);
+        assert_eq!(bytes.len(), 57);
+        let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        let expected = format!(
+            "102474f3c03d2801807c126900000000514b0c1f00000000fe{}",
+            "11".repeat(32)
+        );
+        assert_eq!(hex, expected);
     }
 
     use super::{

@@ -92,4 +92,6 @@ pub enum EntrosAnchorError {
     InvalidVerifierProgram,
     #[msg("Receipt validated_at precedes the identity's last verification timestamp")]
     ReceiptAlreadyUsed,
+    #[msg("The derived account address already holds an account")]
+    DerivedAccountInUse,
 }

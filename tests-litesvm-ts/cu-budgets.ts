@@ -11,10 +11,10 @@ export const maxComputeBudgets = {
   set_validator_pubkey: 3700,
   set_projection_versions: 6000,
   //Anchor
-  mint_anchor: 98985,
+  mint_anchor: 85123, // highest case: a new address. An address that already holds lamports costs less
   update_anchor: 25643,
   authorize_new_wallet: 30465,
-  migrate_identity: 115196,
+  migrate_identity: 124873, // highest case: the mint and record addresses already hold lamports
   reset_identity_state: 30493,
   rebaseline_anchor: 19000,
   set_encrypted_baseline: 20000, // init_if_needed first-call ~17K, update ~10K

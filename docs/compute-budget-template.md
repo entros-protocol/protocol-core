@@ -11,7 +11,7 @@ The following CU values are ceilings (maximum expected values) used by the regre
 | mint_anchor | @mint_anchor@ | @mint_anchorH@ | Includes NonTransferable, MintCloseAuthority, MetadataPointer + TokenMetadata extension init |
 | update_anchor | @update_anchor@ | @update_anchorH@ | Includes trust score computation + timestamp update |
 | authorize_new_wallet | @authorize_new_wallet@ | @authorize_new_walletH@ | Included operations: add new signer in IdentityPDA, approve token delegate |
-| migrate_identity | @migrate_identity@ | @migrate_identityH@ | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, burn previous token, close old mint account, close old Identity PDA |
+| migrate_identity | @migrate_identity@ | @migrate_identityH@ | Included operations: create new mint, setup token2022 extensions, initialize mint, create associated token account, mint 1 token, copy from old identity PDA, write the migration record, burn previous token, close old mint account, close old Identity PDA |
 | reset_identity_state | @reset_identity_state@ | @reset_identity_stateH@ | User-initiated baseline recovery; writes new commitment, zeroes verification history, charges protocol fee, 7-day cooldown enforced. May realloc legacy accounts |
 | rebaseline_anchor | @rebaseline_anchor@ | @rebaseline_anchorH@ | Moves an identity to the current projection under a validator receipt; 7-day cooldown |
 | set_encrypted_baseline | @set_encrypted_baseline@ | @set_encrypted_baselineH@ | Writes the encrypted baseline blob; creates the account on first call |

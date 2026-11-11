@@ -201,6 +201,11 @@ export const deriveIdentityPda = (user: PublicKey) =>
     [Buffer.from("identity"), user.toBuffer()],
     anchorAddr,
   );
+export const deriveMigrationRecordPda = (wallet: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("migration"), wallet.toBuffer()],
+    anchorAddr,
+  );
 export type IdentityStateAcct = {
   anchorDiscriminator: ReadonlyUint8Array;
   owner: Address;
