@@ -19,6 +19,7 @@ import {
   MAX_TRUST_SCORE,
   MIN_STAKE,
   mintAuthorityPda,
+  programdataAddr,
   protocolConfigPda,
   registryAddr,
   SYSTEM_PROGRAM,
@@ -32,8 +33,10 @@ import {
   deterministicKeypair,
   initializeProtocol,
   LITESVM_VALIDATOR,
+  migrateAdmin,
   mintAnchor,
   sendTxns,
+  setProgramDataAcct,
   setProjectionVersions,
   setTime,
   svm,
@@ -585,5 +588,108 @@ test("propose_authority and accept_authority enforce two-step authority transfer
       }),
     ],
     registryAddr,
+  );
+});
+
+const PENDING_AUTHORITY_OFFSET = 113;
+// RegistryError::NoPendingAuthority
+const NO_PENDING_AUTHORITY = "0x177e";
+
+const proposeAuthorityIx = (admin: PublicKey, candidate: PublicKey) =>
+  new TransactionInstruction({
+    programId: registryAddr,
+    keys: [
+      { pubkey: admin, isSigner: true, isWritable: true },
+      { pubkey: protocolConfigPda, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    data: registryCoder.instruction.encode("propose_authority", {
+      new_authority: candidate,
+    }),
+  });
+
+const acceptAuthorityIx = (candidate: PublicKey) =>
+  new TransactionInstruction({
+    programId: registryAddr,
+    keys: [
+      { pubkey: candidate, isSigner: true, isWritable: false },
+      { pubkey: protocolConfigPda, isSigner: false, isWritable: true },
+    ],
+    data: registryCoder.instruction.encode("accept_authority", {}),
+  });
+
+const configBytes = (start: number, end: number) => {
+  const account = svm.getAccount(protocolConfigPda);
+  expect(account).to.not.be.null;
+  return Buffer.from(account?.data ?? []).subarray(start, end);
+};
+
+const pendingAuthority = () =>
+  configBytes(PENDING_AUTHORITY_OFFSET, PENDING_AUTHORITY_OFFSET + 32);
+
+test("propose_authority with the default key cancels a pending proposal", () => {
+  // The previous test left this key as the admin.
+  const adminNowKp = deterministicKeypair(78);
+  const candidateKp = deterministicKeypair(80);
+  svm.airdrop(candidateKp.publicKey, 2_000_000_000n);
+
+  execTx(
+    adminNowKp,
+    [proposeAuthorityIx(adminNowKp.publicKey, candidateKp.publicKey)],
+    registryAddr,
+  );
+  expect(pendingAuthority()).to.deep.equal(candidateKp.publicKey.toBuffer());
+
+  execTx(
+    adminNowKp,
+    [proposeAuthorityIx(adminNowKp.publicKey, PublicKey.default)],
+    registryAddr,
+  );
+  expect(pendingAuthority()).to.deep.equal(Buffer.alloc(32));
+
+  execTx(
+    candidateKp,
+    [acceptAuthorityIx(candidateKp.publicKey)],
+    registryAddr,
+    NO_PENDING_AUTHORITY,
+  );
+  expect(configBytes(8, 40)).to.deep.equal(adminNowKp.publicKey.toBuffer());
+});
+
+test("migrate_admin clears a pending proposal", () => {
+  const adminNowKp = deterministicKeypair(78);
+  const candidateKp = deterministicKeypair(81);
+  const upgradeAuthorityKp = deterministicKeypair(82);
+  svm.airdrop(candidateKp.publicKey, 2_000_000_000n);
+  svm.airdrop(upgradeAuthorityKp.publicKey, 2_000_000_000n);
+
+  execTx(
+    adminNowKp,
+    [proposeAuthorityIx(adminNowKp.publicKey, candidateKp.publicKey)],
+    registryAddr,
+  );
+  expect(pendingAuthority()).to.deep.equal(candidateKp.publicKey.toBuffer());
+
+  setProgramDataAcct(
+    programdataAddr,
+    upgradeAuthorityKp.publicKey,
+    upgradeAuthorityKp.publicKey,
+  );
+  svm.expireBlockhash();
+  migrateAdmin(upgradeAuthorityKp, protocolConfigPda, programdataAddr);
+  expect(pendingAuthority()).to.deep.equal(Buffer.alloc(32));
+  expect(configBytes(8, 40)).to.deep.equal(
+    upgradeAuthorityKp.publicKey.toBuffer(),
+  );
+
+  // The key proposed under the old admin cannot take the role.
+  execTx(
+    candidateKp,
+    [acceptAuthorityIx(candidateKp.publicKey)],
+    registryAddr,
+    NO_PENDING_AUTHORITY,
+  );
+  expect(configBytes(8, 40)).to.deep.equal(
+    upgradeAuthorityKp.publicKey.toBuffer(),
   );
 });

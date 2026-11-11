@@ -30,7 +30,7 @@ pub enum RegistryError {
     ProjectionVersionRollback,
     #[msg("Minimum supported projection version cannot decrease")]
     MinimumProjectionVersionRollback,
-    #[msg("Proposed authority must be non-zero")]
+    #[msg("Reserved")]
     InvalidPendingAuthority,
     #[msg("No pending authority transfer to accept")]
     NoPendingAuthority,

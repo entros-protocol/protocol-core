@@ -306,12 +306,8 @@ pub mod entros_registry {
     }
 
     /// Propose a new protocol authority in a two-step authority transfer.
+    /// The default key cancels a pending proposal.
     pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
-        require!(
-            new_authority != Pubkey::default(),
-            RegistryError::InvalidPendingAuthority
-        );
-
         let config_info = &ctx.accounts.protocol_config;
         require_keys_eq!(
             *config_info.owner,
@@ -525,9 +521,13 @@ pub mod entros_registry {
         let new_len = ProtocolConfig::LEN;
         config_info.resize(new_len)?;
 
-        // Write the new admin pubkey at offset 8
+        // Write the new admin pubkey at offset 8. A proposal made under the old
+        // admin must not survive the change, or its key could accept the role back.
         let mut data = config_info.try_borrow_mut_data()?;
         data[8..40].copy_from_slice(ctx.accounts.new_admin.key().as_ref());
+        data[ProtocolConfig::OFFSET_PENDING_AUTHORITY
+            ..ProtocolConfig::OFFSET_PENDING_AUTHORITY + 32]
+            .fill(0);
         drop(data);
 
         // Transfer rent difference to cover the realloc
