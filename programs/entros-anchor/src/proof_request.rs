@@ -1,8 +1,6 @@
 use crate::errors::EntrosAnchorError;
 use anchor_lang::prelude::*;
 #[cfg(feature = "request-bound-v1")]
-use anchor_lang::system_program;
-#[cfg(feature = "request-bound-v1")]
 use entros_proof_request::read_counter;
 use entros_proof_request::{GENERATION, STATE_LEN};
 
@@ -61,40 +59,16 @@ pub fn advance<'info>(
     let (key, bump) =
         Pubkey::find_program_address(&[b"proof_request_state", wallet.as_ref()], &crate::ID);
     require_keys_eq!(*account.key, key, EntrosAnchorError::InvalidRequestContext);
-    if account.owner == &system_program::ID && account.data_is_empty() {
+    if account.owner == &anchor_lang::system_program::ID && account.data_is_empty() {
         let seeds: &[&[u8]] = &[b"proof_request_state", wallet.as_ref(), &[bump]];
-        let required = Rent::get()?.minimum_balance(STATE_LEN);
-        if account.lamports() < required {
-            system_program::transfer(
-                CpiContext::new(
-                    system.key(),
-                    system_program::Transfer {
-                        from: payer.clone(),
-                        to: account.clone(),
-                    },
-                ),
-                required - account.lamports(),
-            )?;
-        }
-        system_program::allocate(
-            CpiContext::new_with_signer(
-                system.key(),
-                system_program::Allocate {
-                    account_to_allocate: account.clone(),
-                },
-                &[seeds],
-            ),
-            STATE_LEN as u64,
-        )?;
-        system_program::assign(
-            CpiContext::new_with_signer(
-                system.key(),
-                system_program::Assign {
-                    account_to_assign: account.clone(),
-                },
-                &[seeds],
-            ),
+        crate::pda_account::create_pda_account(
+            payer,
+            account,
+            system,
             &crate::ID,
+            STATE_LEN,
+            Rent::get()?.minimum_balance(STATE_LEN),
+            seeds,
         )?;
         ProofRequestState {
             version: GENERATION,

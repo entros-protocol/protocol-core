@@ -91,6 +91,7 @@ const addresses = (wallet) => ({
   verifier: wallet,
   challenger: wallet,
   identity_state: pda("identity", wallet),
+  migration_record: pda("migration", wallet),
   mint: pda("mint", wallet),
   mint_authority: mintAuthorityPda,
   token_account: getAssociatedTokenAddressSync(

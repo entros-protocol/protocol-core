@@ -61,6 +61,40 @@ impl IdentityState {
     pub const LEN_PRE_REBASELINE: usize = 583;
 }
 
+/// Written at PDA seeds `[b"migration", wallet.key().as_ref()]` each time an
+/// identity moves to `wallet`. A migrated identity keeps its trust score and
+/// verification times, so a consumer that counts one action per identity needs
+/// to know when the identity arrived. The slot orders the migration against
+/// other on-chain events. The time compares with the verification timestamps.
+///
+/// The record also names the wallet the identity came from. That wallet keeps
+/// whatever was issued to it for the identity, such as an attestation, so a
+/// consumer follows this link to find what the identity left behind.
+///
+/// A wallet that never received a migration has no record. Nothing closes a
+/// record, and a later migration to the same wallet overwrites it.
+///
+/// Other programs read the first three fields by offset. New fields go last.
+#[account]
+pub struct MigrationRecord {
+    /// Cluster time of the most recent migration to this wallet
+    pub migrated_at: i64,
+    /// Slot of the most recent migration to this wallet
+    pub migrated_slot: u64,
+    /// PDA bump seed
+    pub bump: u8,
+    /// Wallet that held the identity before the most recent migration
+    pub previous_wallet: Pubkey,
+}
+
+impl MigrationRecord {
+    pub const LEN: usize = 8 // discriminator
+        + 8 // migrated_at
+        + 8 // migrated_slot
+        + 1 // bump
+        + 32; // previous_wallet
+}
+
 /// Wallet-keyed encrypted baseline blob, stored at PDA seeds
 /// `[b"encrypted_baseline", wallet.key().as_ref()]`. Persists the user's
 /// previous SimHash + salt across cache wipes and device changes so the
