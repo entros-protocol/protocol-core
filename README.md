@@ -1,5 +1,7 @@
 # protocol-core
 
+> **Status:** This repository contains Solana devnet reference programs in maintenance mode. Entros paused mainnet deployment pending customer demand and gates mainnet release on a multi-party trusted-setup ceremony and an external security audit. See [entros.io/roadmap](https://entros.io/roadmap) for active engineering tracks.
+
 Solana programs for the Entros Protocol. Three Anchor programs handle Anchor minting, zero-knowledge verification, and protocol configuration.
 
 ## Programs
